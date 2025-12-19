@@ -1,63 +1,77 @@
-import {ConfigProvider, message, Modal, theme} from 'antd'
-import {observer} from 'mobx-react-lite'
-import {useCallback, useEffect, useMemo, useState} from 'react'
-import { useSubject } from './hooks/subscribe'
-import { configStore } from './store/config'
-import {message$, modal$} from './utils'
-import { Home } from './components/Home'
-import zhCN from 'antd/locale/zh_CN';
-import {codeReady} from './editor/utils/highlight'
-import { db } from './store/db'
-import { treeStore } from './store/tree'
+import { useEffect, useMemo } from 'react'
+import { Store, StoreContext } from './store/store'
+import { message, Modal, notification, Space } from 'antd'
+import { Button, ThemeProvider } from '@lobehub/ui'
+import Entry from './ui/Entry'
+import { observer } from 'mobx-react-lite'
+import { useTranslation } from 'react-i18next'
 
 const App = observer(() => {
+  const { t } = useTranslation()
   const [messageApi, contextHolder] = message.useMessage()
-  const [modal, modalContext] = Modal.useModal()
-  const [locale, setLocale] = useState('en')
-  useSubject(message$, args => {
-    args === 'destroy' ? messageApi.destroy() : messageApi.open(args)
-  })
-
-  useSubject(modal$, args => {
-    modal[args.type](args.params)
-  })
-  const [ready, setReady] = useState(false)
-  const initial = useCallback(async () => {
-    await configStore.initial()
-    await codeReady()
-    if (configStore.config.autoOpenSpace) {
-      const spaces = await db.space.toArray()
-      const lastOpenSpace = spaces.sort((a, b) => a.lastOpenTime > b.lastOpenTime ? -1 : 1)[0]
-      if (lastOpenSpace) {
-        await treeStore.initial(lastOpenSpace.cid)
-      }
-    }
-    setLocale(configStore.zh ? 'zh' : 'en')
-    setReady(true)
+  const [modalApi, modalContextHolder] = Modal.useModal()
+  const [notifyApi, notifyContextHolder] = notification.useNotification()
+  const store = useMemo(() => {
+    const store = new Store({
+      msg: messageApi,
+      modal: modalApi
+    })
+    store.note.init()
+    return store
   }, [])
-
   useEffect(() => {
-    window.electron.ipcRenderer.invoke('open-space', '')
-    initial()
+    store.system.onIpcMessage('update-ready', () => {
+      notifyApi.info({
+        duration: null,
+        message: t('updateApp.available'),
+        actions: (
+          <Space>
+            <Button type="link" size="small" onClick={() => notifyApi.destroy()}>
+              {t('close')}
+            </Button>
+            <Button
+              type="primary"
+              size="small"
+              onClick={() => {
+                store.system.updateAndRestart()
+                notifyApi.destroy()
+              }}
+            >
+              {t('updateApp.now')}
+            </Button>
+          </Space>
+        )
+      })
+    })
   }, [])
-  const themeObject = useMemo(() => {
-    return configStore.config.dark ? theme.darkAlgorithm : theme.defaultAlgorithm
-  }, [configStore.config.dark])
-  if (!ready) return null
+  if (!store.settings.state.ready) {
+    return null
+  }
   return (
-    <ConfigProvider
-      locale={locale === 'zh' ? zhCN : undefined}
+    <ThemeProvider
+      themeMode={store.settings.state.dark ? 'dark' : 'light'}
       theme={{
-        algorithm: themeObject,
-        token: {
-          colorPrimary: '#3b82f6'
+        components: {
+          Checkbox: {
+            colorBorder: store.settings.state.dark
+              ? 'rgba(255, 255, 255, 0.2)'
+              : 'rgba(0, 0, 0, 0.2)'
+          },
+          Radio: {
+            colorBorder: store.settings.state.dark
+              ? 'rgba(255, 255, 255, 0.2)'
+              : 'rgba(0, 0, 0, 0.2)'
+          }
         }
       }}
     >
-      {contextHolder}
-      {modalContext}
-      <Home />
-    </ConfigProvider>
+      <StoreContext value={store}>
+        {contextHolder}
+        {modalContextHolder}
+        {notifyContextHolder}
+        <Entry />
+      </StoreContext>
+    </ThemeProvider>
   )
 })
 

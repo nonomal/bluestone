@@ -1,166 +1,152 @@
 import { ReactEditor } from 'slate-react'
 import { useGetSetState } from 'react-use'
-import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
-import { mediaType } from '../utils/dom'
-import { useSelStatus } from '../../hooks/editor'
+import { useCallback, useLayoutEffect, useRef } from 'react'
+import { mediaType, nodeResize } from '../utils/dom'
 import { Transforms } from 'slate'
-import { getImageData, nid } from '../../utils'
-import { ElementProps, MediaNode } from '../../el'
-import { isAbsolute, join } from 'path'
 import { EditorUtils } from '../utils/editorUtils'
-import { getRemoteMediaType } from '../utils/media'
-import { Icon } from '@iconify/react'
-import { MainApi } from '../../api/main'
-import { writeFileSync } from 'fs'
+import { ElementProps, MediaNode } from '..'
+import { LoadingOutlined } from '@ant-design/icons'
+import { useTab } from '@/store/note/TabCtx'
+import { getImageData, useSelStatus } from '../utils'
+import { AlignLeft, AlignRight, Download, ScanEye } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
-const resize = (ctx: { e: React.MouseEvent; dom: HTMLElement; height?: number; cb: Function }) => {
-  const height = ctx.height || ctx.dom.clientHeight
-  const startY = ctx.e.clientY
-  let resizeHeight = height
-  const move = (e: MouseEvent) => {
-    resizeHeight = height + e.clientY - startY
-    ctx.dom.parentElement!.style.height = resizeHeight + 'px'
-  }
-  window.addEventListener('mousemove', move)
-  window.addEventListener(
-    'mouseup',
-    (e) => {
-      window.removeEventListener('mousemove', move)
-      e.stopPropagation()
-      ctx.cb(resizeHeight)
-    },
-    { once: true }
-  )
-}
-
+const alignType = new Map([
+  ['left', 'justify-start'],
+  ['right', 'justify-end']
+])
 export function Media({ element, attributes, children }: ElementProps<MediaNode>) {
+  const tab = useTab()
+  const { t } = useTranslation()
   const [selected, path, store] = useSelStatus(element)
   const ref = useRef<HTMLElement>(null)
   const [state, setState] = useGetSetState({
     height: element.height,
     dragging: false,
-    loadSuccess: true,
     url: '',
+    downloading: false,
     selected: false,
     type: mediaType(element.url)
   })
-  const initial = useCallback(async () => {
-    let type = !element.url?.startsWith('http')
-      ? mediaType(element.url)
-      : await getRemoteMediaType(element.url)
-    type = !type ? 'image' : type
-    setState({ type: ['image', 'video', 'autio'].includes(type!) ? type! : 'other' })
-    let realUrl = element.url
-    if (realUrl && !realUrl?.startsWith('http') && !realUrl.startsWith('file:')) {
-      const currentFilePath = store.webview ? store.webviewFilePath : store.openFilePath
-      const file = isAbsolute(realUrl) ? element.url : join(currentFilePath || '', '..', realUrl)
-      const data = getImageData(file)
-      if (data) {
-        realUrl = data
-      }
-    }
-    setState({ url: realUrl })
-    if (state().type === 'image' || state().type === 'other') {
-      const img = document.createElement('img')
-      img.referrerPolicy = 'no-referrer'
-      img.crossOrigin = 'anonymous'
-      img.src = realUrl!
-      img.onerror = (e) => {
-        setState({ loadSuccess: false })
-      }
-      img.onload = () => setState({ loadSuccess: true })
-    }
-  }, [element])
-  useLayoutEffect(() => {
-    if (element.downloadUrl) {
-      return
-    }
-    initial()
-  }, [element.url, element.downloadUrl, store.webviewFilePath])
 
-  const download = useCallback(
-    async (url: string) => {
-      let ext = await getRemoteMediaType(url)
-      if (ext && ext !== 'other') {
-        window.api.fetch(url).then(async (res) => {
-          const buffer = await res.buffer()
-          store
-            .saveFile({
-              name: nid() + '.' + ext![1],
-              buffer: buffer.buffer
-            })
-            .then((res) => {
-              Transforms.setNodes(
-                store.editor,
-                {
-                  url: res,
-                  downloadUrl: null
-                },
-                { at: path }
-              )
-            })
-            .catch((e) => {
-              console.log('err', e)
-            })
-        })
-      }
+  const updateElement = useCallback(
+    (attr: Record<string, any>) => {
+      Transforms.setNodes(store.editor, attr, { at: path })
     },
     [path]
   )
-  useEffect(() => {
-    if (!store.editor.selection) return
-    if (element.downloadUrl) {
-      download(decodeURIComponent(element.downloadUrl))
+  const initial = useCallback(async (element: MediaNode) => {
+    const url = element.id
+      ? getImageData(await tab.store.system.getFilePath(element.id))
+      : element.url || ''
+    let type = element.id
+      ? mediaType(element.id)
+      : element.mediaType
+        ? element.mediaType
+        : await tab.store.getRemoteMediaType(url)
+    if (type && !element.mediaType) {
+      updateElement({
+        mediaType: type
+      })
+    }
+    type = !type ? 'other' : type
+    setState({ type: ['image', 'video', 'autio'].includes(type!) ? type! : 'other', url })
+  }, [])
+
+  useLayoutEffect(() => {
+    initial(element)
+  }, [element.url, element.downloadUrl])
+  const download = useCallback(async () => {
+    if (state().downloading) {
+      return
+    }
+    const url = state().url
+    let ext = url?.match(/\.\w+$/i)?.[0] || ''
+    if (url.startsWith('file://')) {
+      const path = url.replace('file://', '')
+      if (window.api.fs.existsSync(path)) {
+        const savePath = await tab.store.system.showSaveDialog({
+          filters: [{ extensions: [ext], name: 'type' }]
+        })
+        if (savePath.filePath) {
+          await window.api.fs.cp(path, savePath.filePath)
+        }
+      }
+    } else {
+      setState({ downloading: true })
+      try {
+        const res = await fetch(url)
+        const blob = await res.blob()
+        if (!ext) {
+          const contentType = res.headers.get('content-type') || ''
+          ext = contentType.split('/')[1]
+        }
+        const save = await tab.store.system.showSaveDialog({
+          filters: [{ extensions: [ext], name: 'type' }]
+        })
+        if (save.filePath) {
+          window.api.fs.writeBuffer(save.filePath, await blob.arrayBuffer())
+        }
+      } catch (e) {
+        if (url) {
+          window.open(url)
+        }
+      } finally {
+        setState({ downloading: false })
+      }
     }
   }, [element])
   return (
     <div className={'py-2 relative group'} contentEditable={false} {...attributes}>
-      {state().loadSuccess && state().type === 'image' && (
-        <>
-          {state().url?.startsWith('http') && (
-            <div
-              onMouseDown={(e) => e.preventDefault()}
-              className={`text-sm bg-gray-100 text-gray-700 dark:text-gray-100 group-hover:block hidden
-            z-10 rounded border dark:border-gray-500 border-gray-300 absolute dark:bg-black backdrop-blur right-3 top-4 px-1 py-0.5 cursor-pointer
+      {state().type !== 'other' && (
+        <div
+          onMouseDown={(e) => e.preventDefault()}
+          className={`text-base  text-white group-hover:flex hidden items-center space-x-1 *:duration-200 *:cursor-pointer
+            z-10 rounded border border-white/20 absolute bg-black/70 backdrop-blur right-3 top-4 px-1 h-7
             `}
-              onClick={() => {
-                window.api.fetch(state().url).then(async (res) => {
-                  const contentType = res.headers.get('content-type') || ''
-                  const ext = contentType.split('/')[1]
-                  if (ext) {
-                    const buffer = await res.buffer()
-                    MainApi.saveDialog({
-                      filters: [{ name: 'img', extensions: [ext] }],
-                      properties: ['createDirectory']
-                    }).then((res) => {
-                      if (res.filePath) {
-                        writeFileSync(res.filePath, buffer)
-                        MainApi.showInFolder(res.filePath)
-                      }
-                    })
-                  }
-                })
-              }}
-            >
-              <Icon icon={'ic:round-download'} className={'dark:text-gray-200'} />
+        >
+          {state().type === 'image' && (
+            <>
+              <div
+                title={t('editor.media.alignTip')}
+                className={`p-0.5 ${element.align === 'left' ? 'text-blue-500' : 'hover:text-gray-300'}`}
+                onClick={() =>
+                  updateElement({ align: element.align === 'left' ? undefined : 'left' })
+                }
+              >
+                <AlignLeft size={16} />
+              </div>
+              <div
+                title={t('editor.media.alignTip')}
+                className={`p-0.5 ${element.align === 'right' ? 'text-blue-500' : 'hover:text-gray-300'}`}
+                onClick={() =>
+                  updateElement({ align: element.align === 'right' ? undefined : 'right' })
+                }
+              >
+                <AlignRight size={16} />
+              </div>
+              <div
+                className={'p-0.5 hover:text-gray-300'}
+                onClick={() => {
+                  tab.store.note.openPreviewImages(element)
+                }}
+              >
+                <ScanEye size={16} />
+              </div>
+            </>
+          )}
+          {state().downloading ? (
+            <div className={'p-0.5'}>
+              <LoadingOutlined />
+            </div>
+          ) : (
+            <div className={'p-0.5 hover:text-gray-300'} onClick={download}>
+              <Download size={16} />
             </div>
           )}
-          {(state().url?.startsWith('file:') || state().url?.startsWith('data:')) && (
-            <div
-              onMouseDown={(e) => e.preventDefault()}
-              className={`text-sm bg-gray-100 text-gray-700 dark:text-gray-100 group-hover:block hidden
-            z-10 rounded border dark:border-gray-500 border-gray-300 absolute dark:bg-black backdrop-blur right-3 top-4 p-0.5 px-1 cursor-pointer
-            `}
-              onClick={() => {
-                MainApi.showInFolder(state().url.replace('file://', ''))
-              }}
-            >
-              <Icon icon={'ph:folder-open'} className={'dark:text-gray-200'} />
-            </div>
-          )}
-        </>
+        </div>
       )}
-      {selected && (
+      {selected && element.url && !state().url.startsWith('file://') && (
         <>
           <div
             className={
@@ -171,29 +157,24 @@ export function Media({ element, attributes, children }: ElementProps<MediaNode>
           </div>
         </>
       )}
-
       <div
         className={`drag-el group cursor-default relative flex justify-center mb-2 border-2 rounded ${
           selected ? 'border-gray-300 dark:border-gray-300/50' : 'border-transparent'
         }`}
         data-be={'media'}
-        style={{ padding: state().type === 'document' ? '10px 0' : undefined }}
-        draggable={true}
+        style={{
+          padding: state().type === 'document' ? '15px 0' : undefined
+        }}
         onContextMenu={(e) => {
           e.stopPropagation()
         }}
-        onDragStart={(e) => {
-          try {
-            store.dragStart(e)
-            store.dragEl = ReactEditor.toDOMNode(store.editor, element)
-          } catch (e) {}
-        }}
         onMouseDown={(e) => {
-          e.stopPropagation()
-          if (!store.focus) {
+          if (!tab.state.focus) {
             EditorUtils.focus(store.editor)
           }
-          EditorUtils.selectMedia(store, path)
+          tab.selectMedia(path)
+          tab.dragStart(e)
+          tab.dragEl = ReactEditor.toDOMNode(store.editor, element)
         }}
         onClick={(e) => {
           e.preventDefault()
@@ -204,19 +185,17 @@ export function Media({ element, attributes, children }: ElementProps<MediaNode>
         }}
       >
         <div
-          className={'w-full h-full flex justify-center'}
+          className={`w-full h-full flex ${state().type === 'image' && element.align ? alignType.get(element.align) || 'justify-center' : 'justify-center'}`}
           style={{ height: state().height || (state().type === 'other' ? 260 : undefined) }}
         >
           {state().type === 'video' && (
             <video
-              src={element.url}
-              controls={true}
+              src={state().url}
               onMouseDown={(e) => {
                 e.preventDefault()
               }}
-              className={`rounded h-full select-none ${
-                state().dragging ? 'pointer-events-none' : ''
-              }`}
+              controls={true}
+              className={`rounded h-full ${state().dragging ? 'pointer-events-none' : ''} select-none`}
               // @ts-ignore
               ref={ref}
             />
@@ -228,7 +207,7 @@ export function Media({ element, attributes, children }: ElementProps<MediaNode>
               onMouseDown={(e) => {
                 e.preventDefault()
               }}
-              className={`select-none ${state().dragging ? 'pointer-events-none' : ''}`}
+              className={`${state().dragging ? 'pointer-events-none' : ''} select-none`}
               // @ts-ignore
               ref={ref}
             />
@@ -239,21 +218,19 @@ export function Media({ element, attributes, children }: ElementProps<MediaNode>
               // @ts-ignore
               ref={ref}
             >
-              <iframe
+              <webview
                 src={element.url}
-                className={`w-full h-full border-none select-none rounded ${
-                  state().dragging ? 'pointer-events-none' : ''
-                }`}
+                className={`w-full h-full select-none border-none rounded ${state().dragging ? 'pointer-events-none' : ''}`}
+                allowFullScreen={true}
               />
             </div>
           )}
-          {state().type === 'image' && (
+          {state().type === 'image' && !!state().url && (
             <img
               src={state().url}
-              alt={'image'}
-              referrerPolicy={'no-referrer'}
-              crossOrigin={'anonymous'}
+              alt={element.id ? `id:${element.id}` : ''}
               draggable={false}
+              referrerPolicy={'no-referrer'}
               // @ts-ignore
               ref={ref}
               className={
@@ -269,14 +246,16 @@ export function Media({ element, attributes, children }: ElementProps<MediaNode>
               }
               onMouseDown={(e) => {
                 e.preventDefault()
+                e.stopPropagation()
                 setState({ dragging: true })
-                resize({
+                nodeResize({
                   e,
                   height: state().height,
                   dom: ref.current!,
                   cb: (height: number) => {
-                    setState({ height, dragging: false })
+                    setState({ height })
                     Transforms.setNodes(store.editor, { height }, { at: path })
+                    setState({ dragging: false })
                   }
                 })
               }}

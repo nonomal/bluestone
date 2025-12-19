@@ -1,5 +1,4 @@
 import {Editor} from 'slate'
-import {MainApi} from '../../api/main'
 const tryCatchCallback =
   (editorFunc: any, editor: Editor) =>
     (...editorFuncArgs: any) => {
@@ -7,7 +6,7 @@ const tryCatchCallback =
         return editorFunc(...editorFuncArgs)
       } catch (error) {
         if (error instanceof Error) {
-          MainApi.errorLog(error, {operation: editor.operations, name: 'slate-error'})
+          console.error('slate:', error)
         }
         editor.undo()
       }

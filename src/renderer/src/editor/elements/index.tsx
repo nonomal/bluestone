@@ -1,46 +1,60 @@
 import { RenderElementProps, RenderLeafProps } from 'slate-react/dist/components/editable'
 import { Table, TableCell } from './table'
-import { CodeCtx, CodeElement, CodeLine } from './code'
 import { Blockquote } from './blockquote'
 import { List, ListItem } from './list'
 import { Head } from './head'
-import React, { CSSProperties, useContext, useMemo } from 'react'
+import React, { CSSProperties, memo, useEffect, useState } from 'react'
 import { Paragraph } from './paragraph'
 import { InlineChromiumBugfix } from '../utils/InlineChromiumBugfix'
 import { Media } from './media'
-import { useEditorStore } from '../store'
 import { Editor, Transforms } from 'slate'
-import { treeStore } from '../../store/tree'
-import { InlineKatex } from './CodeUI/Katex/InlineKatex'
-import { isLink, parsePath, toSpacePath } from '../../utils/path'
 import { ReactEditor } from 'slate-react'
 import { EditorUtils } from '../utils/editorUtils'
-import { isAbsolute, join } from 'path'
-import { db } from '../../store/db'
 import { slugify } from '../utils/dom'
-import { openConfirmDialog$ } from '../../components/dialog/ConfirmDialog'
-import { message$ } from '../../utils'
-import { deepCreateDoc } from '../../components/tree/openContextMenu'
-import { Attachment } from './attachment'
+import InlineKatex from './CodeUI/Katex/InlineKatex'
+import { CustomLeaf } from '..'
+import { AceElement } from './ace'
+import { useTab } from '@/store/note/TabCtx'
+import { TabStore } from '@/store/note/tab'
+import { WikiLink } from './wikilink'
+import { IDoc } from 'types/model'
 
 const dragStart = (e: React.DragEvent) => {
   e.preventDefault()
   e.stopPropagation()
 }
-
-const toHash = (hash: string) => {
-  const dom = treeStore.currentTab.store.container?.querySelector(
+const isDirtUrl = (text: CustomLeaf) => {
+  return (
+    !!text.bold ||
+    !!text.code ||
+    !!text.color ||
+    !!text.fnc ||
+    text.fnd ||
+    text.html ||
+    text.italic ||
+    text.code ||
+    text.strikethrough ||
+    text.highColor ||
+    !text.text
+  )
+}
+const toHash = (tab: TabStore, hash: string = '') => {
+  const dom = tab.container?.querySelector(
     `[data-head="${slugify(hash.toLowerCase())}"]`
   ) as HTMLElement
   if (dom) {
-    treeStore.currentTab.store.container?.scroll({
+    tab.container?.scroll({
       top: dom.offsetTop + 100,
       behavior: 'smooth'
     })
   }
 }
-
-export const MElement = (props: RenderElementProps) => {
+export const MElement = memo((props: RenderElementProps) => {
+  const tab = useTab()
+  const [, setRefresh] = useState(tab.state.refreshHighlight)
+  useEffect(() => {
+    setRefresh(tab.state.refreshHighlight)
+  }, [tab.state.refreshHighlight])
   switch (props.element.type) {
     case 'blockquote':
       return <Blockquote {...props} />
@@ -61,14 +75,12 @@ export const MElement = (props: RenderElementProps) => {
       )
     case 'list-item':
       return <ListItem {...props} />
-    case 'attach':
-      return <Attachment {...props} />
     case 'list':
       return <List {...props} />
     case 'code':
-      return <CodeElement {...props}>{props.children}</CodeElement>
-    case 'code-line':
-      return <CodeLine {...props} />
+      return <AceElement {...props} />
+    case 'wiki-link':
+      return <WikiLink {...props} />
     case 'table':
       return <Table {...props}>{props.children}</Table>
     case 'table-row':
@@ -82,136 +94,129 @@ export const MElement = (props: RenderElementProps) => {
     default:
       return <Paragraph {...props} />
   }
-}
+})
 
-export const MLeaf = (props: RenderLeafProps) => {
-  const code = useContext(CodeCtx)
-  const store = useEditorStore()
-  return useMemo(() => {
-    const leaf = props.leaf
-    const style: CSSProperties = {}
-    let className = ''
-    let children = <>{props.children}</>
-    if (leaf.code) children = <code className={'inline-code'}>{children}</code>
-    if (leaf.highColor) style.color = leaf.highColor
-    if (leaf.color) style.color = leaf.color
-    if (leaf.bold) children = <strong>{children}</strong>
-    if (leaf.strikethrough) children = <s>{children}</s>
-    if (leaf.italic) children = <i>{children}</i>
-    if (leaf.highlight) className = 'high-text'
-    if (leaf.html) className += ' dark:text-gray-500 text-gray-400'
-    if (leaf.current) {
-      style.background = '#f59e0b'
-    }
-    const dirty = leaf.bold || leaf.code || leaf.italic || leaf.strikethrough || leaf.highColor
-    const selectFormat = () => {
-      try {
-        if (EditorUtils.isDirtLeaf(props.leaf)) {
-          const path = ReactEditor.findPath(store.editor, props.text)
-          if (path) {
-            Transforms.select(store.editor, {
-              anchor: Editor.start(store.editor, path),
-              focus: Editor.end(store.editor, path)
-            })
-          }
+export const MLeaf = memo((props: RenderLeafProps) => {
+  const tab = useTab()
+  const leaf = props.leaf
+  const style: CSSProperties = {}
+  let className = ''
+  let children = <>{props.children}</>
+  if (leaf.code) children = <code className={'inline-code'}>{children}</code>
+  if (leaf.highColor) style.color = leaf.highColor
+  if (leaf.color) style.color = leaf.color
+  if (leaf.bold) children = <strong>{children}</strong>
+  if (leaf.strikethrough) children = <s>{children}</s>
+  if (leaf.italic) children = <i>{children}</i>
+  if (leaf.highlight) className = 'match-text'
+  if (leaf.html) className += ' dark:text-gray-500 text-gray-400'
+  if (leaf.current) {
+    className = 'match-current'
+  }
+  const dirty = leaf.bold || leaf.code || leaf.italic || leaf.strikethrough || leaf.highColor
+  const selectFormat = () => {
+    try {
+      if (EditorUtils.isDirtLeaf(props.leaf)) {
+        const path = ReactEditor.findPath(tab.editor, props.text)
+        if (path) {
+          Transforms.select(tab.editor, {
+            anchor: Editor.start(tab.editor, path),
+            focus: Editor.end(tab.editor, path)
+          })
         }
-      } catch (e) {}
-    }
-    if (leaf.url) {
-      return (
-        <span
-          style={style}
-          data-be={'link'}
-          draggable={false}
-          title={`mod + click to open link, mod + alt + click to open file in new tab`}
-          onDragStart={dragStart}
-          data-url={toSpacePath(treeStore.root?.filePath || '', store.openFilePath || '', leaf.url)}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-            if (e.metaKey || e.ctrlKey) {
-              if (!leaf.url) return
-              if (isLink(leaf.url)) {
-                window.open(leaf.url)
-              } else {
-                const parseRes = parsePath(leaf.url)
-                if (!parseRes.path && parseRes.hash) {
-                  return toHash(parseRes.hash)
-                }
-                const path = isAbsolute(parseRes.path)
-                  ? parseRes.path
-                  : join(treeStore.currentTab.current!.filePath, '..', parseRes.path)
-                db.file
-                  .where('filePath')
-                  .equals(path)
-                  .toArray()
-                  .then((res) => {
-                    for (let f of res) {
-                      const node = treeStore.nodeMap.get(f.cid)
-                      if (node) {
-                        e.altKey ? treeStore.appendTab(node) : treeStore.openNote(node)
-                        if (parseRes.hash) {
-                          setTimeout(() => {
-                            toHash(parseRes.hash)
-                          }, 200)
-                        }
-                        return
-                      }
-                    }
-                    if (treeStore.root && path.endsWith('.md') && path.startsWith(treeStore.root.filePath)) {
-                      openConfirmDialog$.next({
-                        title: 'Note',
-                        description: 'The file does not exist. Do you want to create it?',
-                        okText: 'Create',
-                        okType: 'primary',
-                        onConfirm: () => {
-                          deepCreateDoc(path)
-                        }
-                      })
-                    } else {
-                      message$.next({
-                        type: 'info',
-                        content: 'Invalid link'
-                      })
-                    }
-                  })
-              }
-            } else if (e.detail === 2) {
-              selectFormat()
-            }
-          }}
-          data-slate-inline={true}
-          className={`mx-[1px] link cursor-default ${className}`}
-          {...props.attributes}
-        >
-          {!!props.text?.text && <InlineChromiumBugfix />}
-          {children}
-          {!!props.text?.text && <InlineChromiumBugfix />}
-        </span>
-      )
-    }
+      }
+    } catch (e) {}
+  }
+  if (leaf.url || leaf.hash || leaf.link || leaf.docId) {
     return (
       <span
-        {...props.attributes}
-        data-be={'text'}
+        style={style}
+        data-be={'link'}
         draggable={false}
+        title={'mod + click to open link, mod + alt + click to open file in new tab'}
         onDragStart={dragStart}
+        data-url={leaf.url}
+        onMouseDown={(e) => {
+          if (!focus) {
+            tab.editor.selection = null
+          }
+        }}
         onClick={(e) => {
-          if (e.detail === 2) {
+          e.stopPropagation()
+          e.preventDefault()
+          if (tab.note.state.selectedDoc) {
+            tab.note.setState((state) => {
+              state.selectedDoc = null
+            })
+          }
+          if (e.metaKey || e.ctrlKey) {
+            if (leaf.url) {
+              window.open(leaf.url)
+            }
+            if (leaf.docId) {
+              let node: IDoc | undefined = tab.note.state.nodes[leaf.docId]
+              let folder = false
+              if (node?.folder) {
+                node = tab.note.findFirstChildNote(node)
+                folder = true
+                if (!node) {
+                  tab.store.msg.info('The folder is empty')
+                }
+              }
+              if (node) {
+                e.altKey ? tab.note.createTab(node) : tab.note.openDoc(node)
+                if (leaf.hash) {
+                  setTimeout(() => {
+                    toHash(tab, leaf.hash)
+                  }, 200)
+                }
+              } else if (!folder) {
+                tab.store.msg.info('The target doc has been deleted')
+              }
+            } else if (leaf.hash) {
+              toHash(tab, leaf.hash)
+            } else if (leaf.url) {
+              window.open(leaf.url)
+            } else if (leaf.link) {
+              window.open(leaf.link)
+            } else {
+              tab.store.msg.info('Invalid link')
+            }
+          } else if (e.detail === 2) {
             selectFormat()
           }
         }}
-        data-fnc={leaf.fnc ? 'fnc' : undefined}
-        data-fnd={leaf.fnd ? 'fnd' : undefined}
-        data-fnc-name={leaf.fnc ? leaf.text?.replace(/\[\^(.+)]:?/g, '$1') : undefined}
-        data-fnd-name={leaf.fnd ? leaf.text?.replace(/\[\^(.+)]:?/g, '$1') : undefined}
-        className={`${!!dirty ? 'mx-[1px]' : ''} ${className}`}
-        style={style}
+        data-slate-inline={true}
+        className={`mx-[1px] inline-block link relative cursor-default ${className} ${!!leaf.hash ? 'inner' : ''}`}
+        {...props.attributes}
       >
-        {!!dirty && !!leaf.text && <InlineChromiumBugfix />}
+        {!!props.text?.text && <InlineChromiumBugfix />}
         {children}
-        {!!dirty && !!leaf.text && <InlineChromiumBugfix />}
+        {!!props.text?.text && <InlineChromiumBugfix />}
       </span>
     )
-  }, [props.leaf, props.leaf.text, code.lang])
-}
+  }
+  return (
+    <span
+      {...props.attributes}
+      data-be={'text'}
+      draggable={false}
+      onDragStart={dragStart}
+      onClick={(e) => {
+        if (e.detail === 2) {
+          selectFormat()
+        }
+      }}
+      data-fnc={leaf.fnc ? 'fnc' : undefined}
+      data-fnd={leaf.fnd ? 'fnd' : undefined}
+      data-fnc-name={leaf.fnc ? leaf.text?.replace(/\[\^(.+)]:?/g, '$1') : undefined}
+      data-fnd-name={leaf.fnd ? leaf.text?.replace(/\[\^(.+)]:?/g, '$1') : undefined}
+      className={`${!!dirty ? 'mx-[1px]' : ''} ${className}`}
+      style={style}
+    >
+      {!!dirty && !!leaf.text && <InlineChromiumBugfix />}
+      {children}
+      {!!dirty && !!leaf.text && <InlineChromiumBugfix />}
+    </span>
+  )
+})

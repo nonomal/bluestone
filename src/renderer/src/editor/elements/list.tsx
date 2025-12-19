@@ -1,47 +1,47 @@
-import {ElementProps, ListItemNode, ListNode} from '../../el'
-import React, {createElement, useMemo, useRef} from 'react'
-import {useMEditor} from '../../hooks/editor'
-import {Checkbox} from 'antd'
-import {useEditorStore} from '../store'
-import {observer} from 'mobx-react-lite'
-import {configStore} from '../../store/config'
+import React, { createElement, useMemo, useRef } from 'react'
+import { Checkbox } from 'antd'
+import { ElementProps, ListItemNode, ListNode } from '..'
+import { useTab } from '@/store/note/TabCtx'
+import { useMEditor } from '../utils'
 
-export const List = observer(({element, attributes, children}: ElementProps<ListNode>) => {
-  const store = useEditorStore()
-  return useMemo(() => {
-    const tag = element.order ? 'ol' : 'ul'
-    return (
-      <div
-        className={'relative'}
-        data-be={'list'}
-        {...attributes}
-        onDragStart={store.dragStart}
-      >
-        {createElement(tag, {className: 'm-list', start: element.start, ['data-task']: element.task ? 'true' : undefined}, children)}
-      </div>
-    )
-  }, [element.task, element.order, element.start, element.children, configStore.config.dragToSort])
-})
+export function List({ element, attributes, children }: ElementProps<ListNode>) {
+  const tab = useTab()
+  const tag = element.order ? 'ol' : 'ul'
+  return (
+    <div className={'relative'} data-be={'list'} {...attributes} onDragStart={tab.dragStart}>
+      {createElement(
+        tag,
+        {
+          className: 'm-list',
+          start: element.start,
+          ['data-task']: element.task ? 'true' : undefined
+        },
+        children
+      )}
+    </div>
+  )
+}
 
-export const ListItem = observer(({element, children, attributes}: ElementProps<ListItemNode>) => {
+export function ListItem({ element, children, attributes }: ElementProps<ListItemNode>) {
+  const tab = useTab()
   const [, update] = useMEditor(element)
-  const store = useEditorStore()
   const isTask = typeof element.checked === 'boolean'
-  return useMemo(() => (
+  return (
     <li
       className={`m-list-item ${isTask ? 'task' : ''}`}
       data-be={'list-item'}
-      onDragStart={e => store.dragStart(e)}
-      {...attributes}>
-      {isTask &&
+      onDragStart={(e) => tab.dragStart(e)}
+      {...attributes}
+    >
+      {isTask && (
         <span contentEditable={false} className={'check-item'}>
           <Checkbox
             checked={element.checked}
-            onChange={e => update({checked: e.target.checked})}
+            onChange={(e) => update({ checked: e.target.checked })}
           />
         </span>
-      }
+      )}
       {children}
     </li>
-  ), [element, element.children, store.refreshHighlight])
-})
+  )
+}

@@ -12,10 +12,22 @@ jobs:
         include:
           - os: macos-latest
             platform: 'mac'
+            arch: 'x64'
+          - os: macos-latest
+            platform: 'mac'
+            arch: 'arm64'
+          - os: windows-latest
+            platform: 'win'
+            arch: 'x64'
+          - os: windows-latest
+            platform: 'win'
+            arch: 'arm64'
 
     runs-on: ${{ matrix.os }}
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      NODE_OPTIONS: --max-old-space-size=4096
+      TARGET_ARCH: ${{ matrix.arch }}
 
     permissions:
       contents: write
@@ -23,21 +35,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+
       - name: Setup Node.js environment
-        uses: actions/setup-node@v2.1.2
+        uses: actions/setup-node@v4
         with:
-          node-version: 16.x
+          node-version: 22.x
 
       - name: Install pnpm
         uses: pnpm/action-setup@v2
         with:
           version: 8
 
-      - name: Install
-        run: |
-          pnpm install --no-frozen-lockfile
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
 
-      - name: Set env
+      - name: Set env for mac
         if: matrix.platform == 'mac'
         run: |
           echo "APPLEID=${{ secrets.APPLEID }}" >> $GITHUB_ENV
@@ -45,22 +57,59 @@ jobs:
           echo "CSC_LINK=${{ secrets.CERTIFICATE_OSX_APPLICATION }}" >> $GITHUB_ENV
           echo "CSC_KEY_PASSWORD=${{ secrets.CERTIFICATE_PASSWORD }}" >> $GITHUB_ENV
           echo "APPLETEAMID=${{ secrets.APPLETEAMID }}" >> $GITHUB_ENV
-      - name: Build
+
+      - name: Electron-Mac-x64
+        if: matrix.platform == 'mac' && matrix.arch == 'x64'
         run: |
-          npm run build
-      - name: Build App
+          npm run build:mac:x64
+
+      - name: Electron-Mac-arm64
+        if: matrix.platform == 'mac' && matrix.arch == 'arm64'
+        run: |
+          npm run build:mac:arm64
+
+      - name: Electron-Win-x64
+        if: matrix.platform == 'win' && matrix.arch == 'x64'
+        run: |
+          npm run build:win:x64
+
+      - name: Electron-Win-arm64
+        if: matrix.platform == 'win' && matrix.arch == 'arm64'
+        run: |
+          npm run build:win:arm64
+
+      - name: List dist files
+        run: ls -R dist
+
+      - name: Set env for Aliyun OSS
         if: matrix.platform == 'mac'
         run: |
-          npm run build:mac
-          npm run build:win
-          npm run build:linux
+          echo "OSS_ENDPOINT=${{ secrets.OSS_ENDPOINT }}" >> $GITHUB_ENV
+          echo "OSS_ACCESS_KEY_ID=${{ secrets.OSS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "OSS_ACCESS_KEY_SECRET=${{ secrets.OSS_ACCESS_KEY_SECRET }}" >> $GITHUB_ENV
+          echo "OSS_BUCKET=${{ secrets.OSS_BUCKET }}" >> $GITHUB_ENV
+          echo "REF_NAME=${{ github.ref_name }}" >> $GITHUB_ENV
+          echo "OS_ARCH=${{ matrix.arch }}" >> $GITHUB_ENV
+
+      - name: Set env for Aliyun OSS (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          echo "OSS_ENDPOINT=${{ secrets.OSS_ENDPOINT }}" >> $env:GITHUB_ENV
+          echo "OSS_ACCESS_KEY_ID=${{ secrets.OSS_ACCESS_KEY_ID }}" >> $env:GITHUB_ENV
+          echo "OSS_ACCESS_KEY_SECRET=${{ secrets.OSS_ACCESS_KEY_SECRET }}" >> $env:GITHUB_ENV
+          echo "OSS_BUCKET=${{ secrets.OSS_BUCKET }}" >> $env:GITHUB_ENV
+          echo "REF_NAME=${{ github.ref_name }}" >> $env:GITHUB_ENV
+          echo "OS_ARCH=${{ matrix.arch }}" >> $env:GITHUB_ENV
+
+      - name: Upload to Aliyun OSS
+        run: |
+          node scripts/upload.js
+
       - name: GH Release
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          draft: ''
+          draft: false
           prerelease: true
-          files: |
-            dist/Bluestone*.*
-            dist/latest*.yml

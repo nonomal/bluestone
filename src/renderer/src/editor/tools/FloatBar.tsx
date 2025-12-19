@@ -1,78 +1,46 @@
-import { observer } from 'mobx-react-lite'
-import { useLocalState } from '../../hooks/useLocalState'
-import { useEditorStore } from '../store'
 import { useCallback, useEffect, useRef } from 'react'
-import { treeStore } from '../../store/tree'
 import {
   BoldOutlined,
-  CaretDownOutlined, ClearOutlined,
+  CaretDownOutlined,
+  ClearOutlined,
   FontColorsOutlined,
   ItalicOutlined,
   LinkOutlined,
   StrikethroughOutlined
 } from '@ant-design/icons'
-import { BaseRange, Editor, NodeEntry, Range, Text, Transforms } from 'slate'
+import { BaseRange, Editor, NodeEntry, Range, Transforms } from 'slate'
 import { Tooltip } from 'antd'
 import { EditorUtils } from '../utils/editorUtils'
-import ICode from '../../icons/ICode'
-import { IFileItem } from '../../index'
-import { isMac } from '../../utils'
-import { useSubject } from '../../hooks/subscribe'
 import { getSelRect } from '../utils/dom'
-import Command from '../../icons/keyboard/Command'
-import Ctrl from '../../icons/keyboard/Ctrl'
-import Shift from '../../icons/keyboard/Shift'
-import Option from '../../icons/keyboard/Option'
-import { runInAction } from 'mobx'
+import { ChevronUp, Code, Command, Option, Slash } from 'lucide-react'
+import { os } from '@/utils/common'
+import { useTab } from '@/store/note/TabCtx'
+import { useGetSetState } from 'react-use'
+import { observer } from 'mobx-react-lite'
 
 function Mod() {
-  if (isMac) {
-    return <Command className={'w-3 h-3'} />
+  if (os() === 'mac') {
+    return <Command size={12} />
   } else {
-    return <Ctrl className={'w-3 h-3'} />
+    return <ChevronUp size={12} />
   }
 }
 const tools = [
   {
     type: 'bold',
-    icon: <BoldOutlined />,
-    tooltip: (
-      <div className={'text-xs flex items-center space-x-1'}>
-        <Mod />
-        <span>B</span>
-      </div>
-    )
+    icon: <BoldOutlined />
   },
   {
     type: 'italic',
-    icon: <ItalicOutlined />,
-    tooltip: (
-      <div className={'text-xs flex items-center space-x-1'}>
-        <Mod />
-        <span>I</span>
-      </div>
-    )
+    icon: <ItalicOutlined />
   },
   {
     type: 'strikethrough',
-    icon: <StrikethroughOutlined />,
-    tooltip: (
-      <div className={'text-xs flex items-center space-x-1'}>
-        <Mod />
-        <Shift />
-        <span>S</span>
-      </div>
-    )
+    icon: <StrikethroughOutlined />
   },
   {
     type: 'code',
-    icon: <ICode className={'text-base ml-[1px]'} />,
-    tooltip: (
-      <div className={'text-xs flex items-center space-x-0.5'}>
-        <Option />
-        <span>`</span>
-      </div>
-    )
+    icon: <Code className={'ml-[1px]'} size={16} />
   }
 ]
 
@@ -80,103 +48,94 @@ const colors = [
   { color: 'rgba(16,185,129,1)' },
   { color: 'rgba(245,158,11,1)' },
   { color: 'rgba(59,130,246,1)' },
-  { color: 'rgba(156,163,175,.8)' },
+  { color: 'rgba(156,163,175, 1)' },
   { color: 'rgba(99,102, 241,1)' },
   { color: 'rgba(244,63,94,1)' },
   { color: 'rgba(217,70,239,1)' },
   { color: 'rgba(14, 165, 233, 1)' }
 ]
-const fileMap = new Map<string, IFileItem>()
+const FloatBarWidth = 246
 export const FloatBar = observer(() => {
-  const store = useEditorStore()
-  const inputRef = useRef<any>()
-  const [state, setState] = useLocalState({
+  const tab = useTab()
+  const [state, setState] = useGetSetState({
     open: false,
     left: 0,
     top: 0,
     url: '',
     hoverSelectColor: false,
-    openSelectColor: false
+    openSelectColor: false,
+    refresh: false
   })
-
-  const sel = useRef<BaseRange>()
-  const el = useRef<NodeEntry<any>>()
-
-  const openLink = useCallback(() => {
-    const sel = store.editor.selection!
-    el.current = Editor.parent(store.editor, sel.focus.path)
-    store.highlightCache.set(el.current[0], [{ ...sel, highlight: true }])
-    store.openInsertLink$.next(sel)
-    runInAction(() => {
-      store.refreshHighlight = !store.refreshHighlight
-      store.openLinkPanel = true
-    })
+  const refresh = useCallback(() => {
+    setState({ refresh: !state().refresh })
   }, [])
-
-  useSubject(store.floatBar$, (type) => {
-    if (type === 'link') {
-      const [text] = Editor.nodes(store.editor, {
-        match: Text.isText
-      })
-      if (text && text[0].url) {
-        Transforms.select(store.editor, text[1])
-      }
-      setTimeout(() => {
-        store.setState((store) => (store.domRect = getSelRect()))
-        resize(true)
-        openLink()
-        setTimeout(() => {
-          inputRef.current?.focus()
-        }, 16)
-      })
-    } else if (type === 'highlight') {
-      if (!Range.isCollapsed(store.editor.selection!)) {
-        setState({ openSelectColor: true, hoverSelectColor: false })
-        resize(true)
-      }
+  const openLink = useCallback(() => {
+    const sel = tab.editor.selection!
+    el.current = Editor.parent(tab.editor, sel.focus.path)
+    tab.highlightCache.set(el.current[0], [{ ...sel, highlight: true }])
+    tab.setState((state) => {
+      state.openInsertLink = true
+      tab.refreshHighlight()
+    })
+  }, [tab.editor])
+  const sel = useRef<BaseRange>(null)
+  const el = useRef<NodeEntry<any>>(null)
+  useEffect(() => {
+    if (tab.state.showFloatBar) {
+      setState({ open: true })
+      resize(tab.state.domRect)
+    } else {
+      setState({ open: false })
     }
-  })
-  useEffect(() => {}, [store.refreshFloatBar])
+  }, [tab.state.showFloatBar])
 
-  const resize = useCallback((force = false) => {
-    if (store.domRect && !store.openLinkPanel) {
-      let left = store.domRect.x
-      if (!treeStore.fold) left -= treeStore.width
-      left = left - ((state.openSelectColor ? 260 : 228) - store.domRect.width) / 2
-      const container = store.container!
+  const resize = useCallback(
+    (domRect: DOMRect | null) => {
+      if (!domRect) return
+      let left = domRect.x
+      const barWidth = state().openSelectColor ? 264 : FloatBarWidth + 4
+      if (!tab.store.settings.state.foldSideBar) {
+        left -= tab.store.settings.state.sidePanelWidth
+      }
+      left += domRect.width / 2 - barWidth / 2
+      const container = tab.container!
       if (left < 4) left = 4
-      const barWidth = state.openSelectColor ? 264 : 232
       if (left > container.clientWidth - barWidth) left = container.clientWidth - barWidth
-      let top = state.open && !force ? state.top : container.scrollTop + store.domRect.top - 80
-      if (treeStore.tabs.length > 1) top -= 30
+      let top =
+        container.scrollTop + domRect.top - 76 - (tab.store.note.state.tabs.length > 1 ? 34 : 0)
       setState({
         open: true,
         left,
         top
       })
-    }
-  }, [])
+    },
+    [tab]
+  )
+  useEffect(() => {
+    setState({
+      open: false
+    })
+  }, [tab.store.note.state.tabs.length])
 
   useEffect(() => {
-    if (store.domRect) {
-      resize(true)
-      sel.current = store.editor.selection!
+    if (tab.state.domRect) {
+      resize(tab.state.domRect)
+      sel.current = tab.editor.selection!
     } else {
       setState({ open: false })
-      fileMap.clear()
     }
-  }, [store.domRect, store.openSearch])
+  }, [tab.state.domRect, tab.store.settings.state.showChatBot])
 
   useEffect(() => {
-    if (state.open) {
+    if (state().open) {
       const close = (e: KeyboardEvent) => {
-        if (e.key === 'Escape' && !store.openLinkPanel) {
+        if (e.key === 'Escape') {
           e.preventDefault()
           setState({ open: false })
-          fileMap.clear()
+          // fileMap.clear()
           const end = Range.end(sel.current!).path
-          if (Editor.hasPath(store.editor, end)) {
-            Transforms.select(store.editor, Editor.end(store.editor, end))
+          if (Editor.hasPath(tab.editor, end)) {
+            Transforms.select(tab.editor, Editor.end(tab.editor, end))
           }
         }
       }
@@ -186,67 +145,65 @@ export const FloatBar = observer(() => {
       setState({ openSelectColor: false, hoverSelectColor: false })
     }
     return () => {}
-  }, [state.open])
+  }, [state().open])
 
   useEffect(() => {
     const change = () => {
-      if (state.open) {
+      if (state().open) {
         const rect = getSelRect()
         if (rect) {
-          store.setState((state) => (state.domRect = rect))
+          tab.setState({ domRect: rect })
         }
-        resize(true)
+        resize(rect)
       }
     }
     window.addEventListener('resize', change)
     return () => window.removeEventListener('resize', change)
   }, [])
-  const setLink = useCallback(() => {
-    Transforms.setNodes(
-      store.editor,
-      { url: state.url || undefined },
-      { match: Text.isText, split: true }
-    )
-  }, [])
+
   return (
     <div
       style={{
-        left: state.left,
-        top: state.top
+        left: state().left,
+        top: state().top
       }}
       onMouseDown={(e) => {
         e.preventDefault()
         e.stopPropagation()
       }}
       className={`${
-        state.open ? 'duration-100' : 'hidden'
-      } float-bar rounded overflow-hidden ctx-panel
+        state().open ? 'duration-100' : 'hidden'
+      } float-bar rounded overflow-hidden ctx-panel select-none
       `}
     >
       <div
-        className={`${state.openSelectColor ? 'w-[260px]' : 'w-[228px]'} h-full overflow-hidden`}
+        style={{
+          width: state().openSelectColor ? 260 : FloatBarWidth
+        }}
+        className={`h-full overflow-hidden`}
       >
-        {!state.openSelectColor && (
+        {!state().openSelectColor && (
           <div className={'flex *:h-full *:flex *:items-center justify-center h-full'}>
             <div className={`flex *:h-full *:flex *:items-center`}>
               <div
                 className={`${
-                  EditorUtils.isFormatActive(store.editor, 'highColor')
+                  EditorUtils.isFormatActive(tab.editor, 'highColor')
                     ? 'text-blue-500'
                     : 'dark:text-gray-200 text-gray-600'
-                } py-0.5 px-1.5  ${
-                  state.hoverSelectColor ? 'dark:bg-gray-100/10 bg-gray-200/50' : ''
+                } py-0.5 px-2  ${
+                  state().hoverSelectColor ? 'dark:bg-gray-100/10 bg-gray-200/50' : ''
                 } dark:hover:bg-gray-100/10 hover:bg-gray-200/50 cursor-pointer`}
                 onMouseEnter={(e) => e.stopPropagation()}
                 onClick={() => {
-                  if (EditorUtils.isFormatActive(store.editor, 'highColor')) {
-                    EditorUtils.highColor(store.editor)
+                  if (EditorUtils.isFormatActive(tab.editor, 'highColor')) {
+                    EditorUtils.highColor(tab.editor)
                   } else {
                     EditorUtils.highColor(
-                      store.editor,
+                      tab.editor,
                       localStorage.getItem('high-color') || '#10b981'
                     )
                   }
+                  refresh()
                 }}
               >
                 <FontColorsOutlined />
@@ -259,31 +216,30 @@ export const FloatBar = observer(() => {
                 onMouseLeave={() => setState({ hoverSelectColor: false })}
                 onClick={() => {
                   setState({ openSelectColor: true, hoverSelectColor: false })
-                  resize()
+                  resize(tab.state.domRect)
                 }}
               >
                 <CaretDownOutlined className={'scale-95'} />
               </div>
             </div>
             {tools.map((t) => (
-              <Tooltip title={t.tooltip} key={t.type} mouseEnterDelay={0.3}>
-                <div
-                  key={t.type}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={(e) => {
-                    EditorUtils.toggleFormat(store.editor, t.type)
-                  }}
-                  className={`${
-                    EditorUtils.isFormatActive(store.editor, t.type)
-                      ? 'text-blue-500 '
-                      : 'dark:hover:text-gray-200 hover:text-gray-600'
-                  }
-              cursor-pointer py-0.5 px-1.5 dark:hover:bg-gray-100/10 hover:bg-gray-200/50
+              <div
+                key={t.type}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  tab.keyboard.toggleFormat(t.type as any)
+                  refresh()
+                }}
+                className={`${
+                  EditorUtils.isFormatActive(tab.editor, t.type)
+                    ? 'text-blue-500 '
+                    : 'dark:hover:text-gray-200 hover:text-gray-600'
+                }
+              cursor-pointer py-0.5 ${t.type !== 'code' ? 'px-2' : 'px-1.5'} dark:hover:bg-gray-100/10 hover:bg-gray-200/50
               `}
-                >
-                  {t.icon}
-                </div>
-              </Tooltip>
+              >
+                {t.icon}
+              </div>
             ))}
             <div className={'h-full w-[1px] dark:bg-gray-200/10 bg-gray-200 flex-shrink-0'} />
             <div
@@ -291,13 +247,7 @@ export const FloatBar = observer(() => {
               onClick={(e) => {
                 openLink()
               }}
-              className={`${
-                EditorUtils.isFormatActive(store.editor, 'url')
-                  ? 'text-blue-500 '
-                  : 'dark:hover:text-gray-200 hover:text-gray-600'
-              }
-              cursor-pointer py-0.5 px-1.5 dark:hover:bg-gray-100/10 hover:bg-gray-200/50
-              `}
+              className={`cursor-pointer py-0.5 px-1.5 dark:hover:bg-gray-100/10 hover:bg-gray-200/50`}
             >
               <LinkOutlined />
               <span className={'ml-1 text-[13px]'}>Link</span>
@@ -317,8 +267,7 @@ export const FloatBar = observer(() => {
                   'cursor-pointer px-2 dark:hover:text-gray-200 dark:hover:bg-gray-200/5 hover:bg-gray-200/50 hover:text-gray-600'
                 }
                 onClick={() => {
-                  EditorUtils.clearMarks(store.editor, true)
-                  EditorUtils.highColor(store.editor)
+                  tab.keyboard.clearFormat()
                 }}
               >
                 <ClearOutlined />
@@ -326,19 +275,19 @@ export const FloatBar = observer(() => {
             </Tooltip>
           </div>
         )}
-        {state.openSelectColor && (
+        {state().openSelectColor && (
           <div className={'flex items-center space-x-2 justify-center h-full'}>
             <div
               className={
-                'w-5 h-5 rounded border cursor-pointer dark:border-white/20 dark:hover:border-white/50 border-black/20 hover:border-black/50 flex items-center justify-center dark:text-white/30 dark:hover:text-white/50 text-black/30 hover:text-black/50'
+                'w-5 h-5 rounded border cursor-pointer dark:border-white/30 dark:hover:border-white/60 border-black/30 hover:border-black/50 flex items-center justify-center dark:text-white/40 dark:hover:text-white/60 text-black/40 hover:text-black/60'
               }
               onClick={() => {
-                EditorUtils.highColor(store.editor)
+                EditorUtils.highColor(tab.editor)
                 setState({ openSelectColor: false })
-                resize()
+                // resize()
               }}
             >
-              /
+              <Slash size={14} />
             </div>
             {colors.map((c) => (
               <div
@@ -347,9 +296,9 @@ export const FloatBar = observer(() => {
                 className={`float-color-icon flex-shrink-0 duration-200`}
                 onClick={() => {
                   localStorage.setItem('high-color', c.color)
-                  EditorUtils.highColor(store.editor, c.color)
+                  EditorUtils.highColor(tab.editor, c.color)
                   setState({ openSelectColor: false })
-                  resize()
+                  // resize()
                 }}
               />
             ))}

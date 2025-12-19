@@ -1,170 +1,72 @@
-import {observer} from 'mobx-react-lite'
-import {MEditor} from './Editor'
-import {Heading} from './tools/Leading'
-import {Empty} from '../components/Empty'
-import {Tab} from '../index'
-import React, {useCallback, useEffect, useLayoutEffect, useMemo} from 'react'
-import {EditorStoreContext} from './store'
-import {FloatBar} from './tools/FloatBar'
-import {TableAttr} from './tools/TableAttr'
-import {Search} from './tools/Search'
-import {mediaType} from './utils/dom'
-import {treeStore} from '../store/tree'
-import {MainApi} from '../api/main'
-import {FolderOpenOutlined} from '@ant-design/icons'
-import {getImageData, isMod} from '../utils'
-import {LangAutocomplete} from './tools/LangAutocomplete'
-import {configStore} from '../store/config'
-import {InsertAutocomplete} from './tools/InsertAutocomplete'
+import { MEditor } from './Editor'
+import { Heading } from './tools/Leading'
+import React, { useCallback, useEffect, useMemo, useRef } from 'react'
+import { FloatBar } from './tools/FloatBar'
+import { Search } from './tools/Search'
+import { LangAutocomplete } from './tools/LangAutocomplete'
+import { InsertAutocomplete } from './tools/InsertAutocomplete'
+import { PhotoSlider } from 'react-photo-view'
+import { useStore } from '@/store/store'
+import { isMod } from '@/utils/common'
+import { TabContext } from '@/store/note/TabCtx'
+import { observer } from 'mobx-react-lite'
+import { TabStore } from '@/store/note/tab'
+import { ChooseWikiLink } from './tools/Links'
 import { InsertLink } from './tools/InsertLink'
-import { useLocalState } from '../hooks/useLocalState'
-
-export const EditorFrame = observer(({tab}: {
-  tab: Tab
-}) => {
-  const [state, setState] = useLocalState({
-    showLeftPadding: false
-  })
+import { History } from './ui/History'
+import { Empty } from './ui/Empty'
+export const EditorFrame = observer(({ tab }: { tab: TabStore }) => {
+  const timer = useRef(0)
+  const store = useStore()
   const click = useCallback((e: React.MouseEvent) => {
     if (isMod(e) && e.target) {
       const el = (e.target as HTMLDivElement).parentElement
       if (!el) return
       if (el.dataset.fnc) {
         const target = document.querySelector(`[data-fnd-name="${el.dataset.fncName}"]`)
-        target?.scrollIntoView({behavior: 'smooth'})
+        target?.scrollIntoView({ behavior: 'smooth' })
       }
       if (el.dataset.fnd) {
         const target = document.querySelector(`[data-fnc-name="${el.dataset.fndName}"]`)
-        target?.scrollIntoView({behavior: 'smooth'})
+        target?.scrollIntoView({ behavior: 'smooth' })
       }
     }
   }, [])
 
-  const mt = useMemo(() => mediaType(tab.current?.filePath || ''), [tab.current])
-  useLayoutEffect(() => {
-    tab.store.openFilePath = tab.current?.filePath || null
-  }, [tab.current?.filePath])
-
-  const size = useMemo(() => {
-    return {
-      width: window.innerWidth - (treeStore.fold ? 0 : treeStore.width),
-      height: window.innerHeight - 40
-    }
-  }, [treeStore.size, treeStore.fold, treeStore.width])
-  const pt = useMemo(() => {
-    let pt = 0
-    if (tab.store.openSearch) pt += 46
-    return pt
-  }, [tab.store.openSearch, treeStore.tabs.length])
-  useEffect(() => {
-    const show = treeStore.fold && configStore.config.showLeading
-    if (show) {
-      setTimeout(() => {
-        setState({
-          showLeftPadding: true
-        })
-      }, 300)
-    } else {
-      setState({
-        showLeftPadding: false
-      })
-    }
-  }, [treeStore.fold])
   return (
-    <EditorStoreContext.Provider value={tab.store}>
-      <Search />
+    <TabContext value={tab}>
       <div
-        className={'flex-1 h-full overflow-y-auto items-start relative'}
+        className={`flex-1 h-full overflow-y-auto items-start relative ${tab.state.startDragging ? 'dragging' : ''}`}
+        onScroll={(e) => {
+          clearTimeout(timer.current)
+        }}
         ref={(dom) => {
-          tab.store.setState((state) => (state.container = dom))
+          tab.container = dom as HTMLDivElement
         }}
       >
-        {tab.current && (
+        <Search />
+        {!!tab.state.doc && (
           <>
-            <div
-              className={`items-start min-h-[calc(100vh_-_40px)] relative ${
-                mt === 'markdown' ? '' : 'hidden'
-              }`}
-              onClick={click}
-              style={{ paddingTop: pt }}
-            >
-              <div className={`flex-1 flex justify-center items-start h-full pr-8`}>
-                <div
-                  className={`duration-200 ${
-                    state.showLeftPadding ? 'w-40' : 'w-0'
-                  } xl:block hidden`}
-                />
-                <div
-                  style={{ maxWidth: configStore.config.editorWidth + 96 || 796 }}
-                  className={`flex-1 content px-12 ${
-                    configStore.config.editorLineHeight === 'compact'
-                      ? 'line-height-compact'
-                      : configStore.config.editorLineHeight === 'loose'
-                      ? 'line-height-loose'
-                      : ''
-                  }`}
-                >
-                  <MEditor note={tab.current} />
-                </div>
-                {tab === treeStore.currentTab && <Heading note={tab.current} />}
-              </div>
-            </div>
-            {mt !== 'other' && mt !== 'markdown' && (
-              <>
-                {mt === 'image' ? (
-                  <div
-                    className={
-                      'h-full overflow-y-auto flex items-center flex-wrap justify-center py-5 px-10'
-                    }
-                    style={{ paddingTop: pt + 20 }}
-                  >
-                    <img src={getImageData(tab.current?.filePath)} alt="" className={'block'} />
-                  </div>
-                ) : (
-                  <div
-                    style={{
-                      ...size,
-                      paddingTop: pt + 20
-                    }}
-                    className={'px-10 pb-5'}
-                  >
-                    <iframe
-                      className={'w-full h-full overflow-y-auto rounded border b1'}
-                      src={tab.current.filePath}
-                    />
-                  </div>
-                )}
-              </>
-            )}
-            {mt === 'other' && (
+            <div className={`items-start min-h-[calc(100vh_-_40px)] relative`} onClick={click}>
               <div
-                style={{ height: size.height }}
-                className={'flex items-center flex-col justify-center'}
+                style={{ transitionProperty: 'padding' }}
+                className={`flex-1 duration-200 flex justify-center items-start h-full`}
               >
-                <div className={'text-gray-600'}>
-                  {'Opening this file type is not currently supported'}
+                <div style={{ maxWidth: 796 }} className={`flex-1 content px-12`}>
+                  <MEditor tab={tab} />
                 </div>
-                <div
-                  className={
-                    'text-indigo-500 text-sm mt-3 cursor-default duration-200 hover:text-indigo-600'
-                  }
-                  onClick={() => {
-                    MainApi.showInFolder(tab.current?.filePath || '')
-                  }}
-                >
-                  <FolderOpenOutlined /> {'Show in Finder'}
-                </div>
+                {!store.settings.state.showChatBot && <Heading tab={tab} />}
               </div>
-            )}
+              <ChooseWikiLink />
+            </div>
           </>
         )}
-        {!tab.current && <Empty />}
+        {!tab.state.doc && <Empty />}
         <FloatBar />
         <InsertLink />
-        <TableAttr />
-        <LangAutocomplete />
+        <LangAutocomplete tab={tab} />
         <InsertAutocomplete />
       </div>
-    </EditorStoreContext.Provider>
+    </TabContext>
   )
 })

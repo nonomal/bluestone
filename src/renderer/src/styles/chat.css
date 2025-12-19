@@ -1,0 +1,90 @@
+.chat-input-mask {
+  height: 30px;
+  background: var(--chat-bg);
+  position: absolute;
+  top: -30px;
+  width: 100%;
+  left: 0;
+  z-index: 10;
+  /* 使用 mask-image 创建从透明到不透明的渐变 */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, black 100%);
+  pointer-events: none; /* 允许鼠标事件穿透遮罩层 */
+}
+.chat {
+  background-color: var(--chat-bg);
+  @apply flex flex-col h-full relative;
+}
+.chat-list {
+  display: flex;
+  justify-content: center;
+  opacity: 0;
+  > div {
+    max-width: 780px;
+  }
+}
+.chat-input {
+  max-width: 760px;
+}
+
+.chat-user-message {
+  background-color: var(--chat-user-message-bg-color);
+  border-radius: 24px 4px 24px 24px;
+}
+.chat-list .ai-message .last {
+  display: none;
+}
+.chat-list .ai-message:last-child {
+  min-height: calc(100vh - 260px);
+  .last {
+    display: flex;
+  }
+}
+
+.chat-list .user-message .last {
+  display: none;
+}
+.chat-list .user-message:nth-last-child(2) {
+  .last {
+    display: flex;
+  }
+}
+
+.ai-msg-actions {
+  opacity: 0;
+  transition: opacity 0.3s ease-in-out;
+  pointer-events: none;
+}
+
+.ai-message-content:hover .ai-msg-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pending .ai-message:last-child .ai-msg-actions {
+  pointer-events: none;
+}
+.switch-model-menu {
+  .ant-dropdown-menu-item {
+    padding: 5px 10px !important;
+  }
+  .ant-dropdown-menu-item-group-title {
+    padding: 5px 10px !important;
+  }
+}
+
+.user-message,
+.ai-message {
+  transform: translateZ(0);
+  will-change: transform;
+  contain: content;
+  font-size: 15px;
+}
+
+.message-markdown > div > :first-child {
+  margin-top: 5px !important;
+}
+
+.ai-message {
+  scroll-margin: 100px;
+}

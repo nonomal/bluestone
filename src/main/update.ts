@@ -1,61 +1,53 @@
-import { autoUpdater, CancellationToken } from 'electron-updater'
+import { app, BrowserWindow, ipcMain } from 'electron'
+import { autoUpdater } from 'electron-updater'
+import os from 'os'
 import log from 'electron-log'
-import {BrowserWindow, ipcMain} from 'electron'
-autoUpdater.logger = log
-// @ts-ignore
-autoUpdater.logger.transports.file.level = 'info'
-autoUpdater.setFeedURL({
-  provider: 'github',
-  owner: '1943time',
-  repo: 'bluestone'
-})
 autoUpdater.autoDownload = false
-autoUpdater.autoInstallOnAppQuit = true
-
-export class AppUpdate {
-  cancelToken?: CancellationToken
-  get win() {
-    return BrowserWindow.getFocusedWindow()
-  }
-  constructor() {
-    ipcMain.handle('check-updated', () => {
-      autoUpdater.checkForUpdatesAndNotify()
-      return new Promise((resolve, reject) => {
-        autoUpdater.once('update-available', resolve)
-        autoUpdater.once('update-not-available', reject)
+log.initialize()
+autoUpdater.logger = log
+log.transports.file.level = 'info'
+export const registerUpdate = () => {
+  if (app.isPackaged) {
+    const feedUrl = `https://www.inkdown.cn/update/${app.getVersion()}/${os.platform()}/${os.arch()}`
+    try {
+      autoUpdater.setFeedURL({
+        provider: 'generic',
+        url: feedUrl
       })
-    })
+      // autoUpdater.on('error', (err) => {
+      //   // log.error('更新出错:', err == null ? 'unknown' : (err.stack || err).toString())
+      // })
 
-    ipcMain.handle('start-update', () => {
-      this.cancelToken = new CancellationToken()
-      return autoUpdater.downloadUpdate(this.cancelToken)
-    })
-
-    ipcMain.on('cancel-update', () => {
-      this.cancelToken?.cancel()
-      this.cancelToken?.dispose()
-    })
-
-    ipcMain.on('install-update', () => {
-      autoUpdater.quitAndInstall()
-    })
-
-    autoUpdater.on('update-available', (info) => {
-      this.win?.webContents.send('update-available', info)
-    })
-
-    autoUpdater.on('update-not-available', (info) => {
-      this.win?.webContents.send('update-not-available')
-    })
-
-    autoUpdater.on('error', (e, message) => {
-      this.win?.webContents.send('update-error', message)
-    })
-    autoUpdater.on('download-progress', (progressObj) => {
-      this.win?.webContents.send('update-progress', progressObj)
-    })
-    autoUpdater.on('update-downloaded', (info) => {
-      this.win?.webContents.send('update-downloaded', info)
-    })
+      // autoUpdater.on('checking-for-update', () => {
+      //   // log.info('正在检查更新...')
+      // })
+      // autoUpdater.on('update-not-available', () => {
+      //   // log.info('当前已是最新版本')
+      // })
+      // 发现可用更新
+      autoUpdater.on('update-available', () => {
+        // log.info('发现新版本:', info.version)
+        autoUpdater.downloadUpdate()
+      })
+      autoUpdater.on('update-downloaded', () => {
+        // log.info('更新下载完成，版本:', info.version)
+        const windows = BrowserWindow.getAllWindows()
+        windows.forEach((window) => {
+          window.webContents.send('update-ready')
+        })
+      })
+      autoUpdater.checkForUpdates()
+      setInterval(
+        () => {
+          autoUpdater.checkForUpdates()
+        },
+        60 * 60 * 1000
+      )
+      ipcMain.on('udpate-and-restart', () => {
+        autoUpdater.quitAndInstall()
+      })
+    } catch (e) {
+      log.error('设置更新源失败:', e)
+    }
   }
 }

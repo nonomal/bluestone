@@ -1,36 +1,37 @@
-import {observer} from 'mobx-react-lite'
-import React, {CSSProperties, useRef} from 'react'
-import Drag from '../../icons/Drag'
-import {useEditorStore} from '../store'
-import {configStore} from '../../store/config'
+import { CSSProperties, memo, useRef } from 'react'
+import { GripVertical } from 'lucide-react'
+import { useTab } from '@/store/note/TabCtx'
+import { ReactEditor } from 'slate-react'
 
-
-export const DragHandle = observer((props: {
-  style?: CSSProperties,
-}) => {
+export const DragHandle = memo((props: { style?: CSSProperties }) => {
   const ref = useRef<HTMLDivElement>(null)
-  const store = useEditorStore()
-  if (!configStore.config.dragToSort) return null
+  const tab = useTab()
+  if (ReactEditor.isReadOnly(tab.editor)) return null
   return (
     <span
       className={'drag-handle'}
-      style={{...props.style,}}
-      contentEditable={false}
+      tabIndex={-1}
+      style={{ ...props.style }}
       ref={ref}
       onMouseDown={(e) => {
         let parent = ref.current!.parentElement!
         if (parent.parentElement?.dataset.be === 'list-item') {
-          if (!parent.previousSibling || (parent.previousSibling as HTMLElement).classList.contains('check-item')) {
+          if (
+            !parent.previousSibling ||
+            (parent.previousSibling as HTMLElement).classList.contains('check-item')
+          ) {
             parent = parent.parentElement
           }
         }
-        parent.draggable = true
-        store.dragEl = parent
+        tab.dragEl = parent
+        tab.editor.selection = null
+
+        tab.selChange$.next(null)
+        tab.dragStart(e)
+        e.stopPropagation()
       }}
     >
-      <Drag
-        className={'drag-icon'}
-      />
+      <GripVertical className={'drag-icon'} />
     </span>
   )
 })

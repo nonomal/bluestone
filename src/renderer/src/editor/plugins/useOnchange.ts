@@ -1,68 +1,77 @@
-import {BaseOperation, BaseSelection, Editor, Element, NodeEntry, Path, Range} from 'slate'
-import {useMemo, useRef} from 'react'
-import {EditorStore} from '../store'
-import {runInAction} from 'mobx'
-import {Subject} from 'rxjs'
+import { Editor, Element, Node, Path, Range } from 'slate'
+import { useMemo, useRef } from 'react'
+import { TabStore } from '@/store/note/tab'
+import { getDomRect } from '@/utils/dom'
 
-export const selChange$ = new Subject<{sel: BaseSelection, node: NodeEntry<any>} | null>()
-const floatBarIgnoreNode = new Set(['code-line', 'inline-katex'])
-export function useOnchange(editor: Editor, store: EditorStore) {
+const floatBarIgnoreNode = new Set(['code', 'inline-katex', 'wiki-link'])
+export function useOnchange(tab: TabStore) {
   const rangeContent = useRef('')
   return useMemo(() => {
-    return (value: any, operations: BaseOperation[]) => {
-      const sel = editor.selection
-      const [node] = Editor.nodes<Element>(editor, {
-        match: n => Element.isElement(n),
+    return (setSelection = false) => {
+      const sel = tab.editor.selection
+      const [node] = Editor.nodes<Element>(tab.editor, {
+        match: (n) => Element.isElement(n),
         mode: 'lowest'
       })
-      setTimeout(() => {
-        selChange$.next({
-          sel, node
-        })
-      })
-
-      runInAction(() => store.sel = sel)
       if (!node) return
-      setTimeout(() => {
-        selChange$.next({
-          sel, node
-        })
-      })
-      if (sel && !floatBarIgnoreNode.has(node[0].type) &&
+      if (
+        sel &&
+        !floatBarIgnoreNode.has(node[0].type) &&
         !Range.isCollapsed(sel) &&
         Path.equals(Path.parent(sel.focus.path), Path.parent(sel.anchor.path))
       ) {
         const domSelection = window.getSelection()
         const domRange = domSelection?.getRangeAt(0)
-        if (rangeContent.current === domRange?.toString()) {
-          return store.setState(state => state.refreshFloatBar = !state.refreshFloatBar)
+        const rect = getDomRect()
+        const rangeStr = domRange?.toString() || ''
+        if (rect && rangeContent.current !== rangeStr) {
+          rangeContent.current = rangeStr
+          tab.setState((state) => {
+            state.domRect = rect
+          })
         }
-        rangeContent.current = domRange?.toString() || ''
-        const rect = domRange?.getBoundingClientRect()
-        if (rect) {
-          store.setState(state => state.domRect = rect)
-        }
-      } else if (store.domRect) {
+      } else if (tab.state.domRect) {
         rangeContent.current = ''
-        store.setState(state => state.domRect = null)
+        tab.setState((state) => {
+          state.domRect = null
+        })
       }
-
-      if (node && node[0].type === 'media') {
-        store.mediaNode$.next(node)
+      if (
+        node &&
+        node[0].type === 'wiki-link' &&
+        node[0]?.children?.[0]?.text?.slice(0, sel?.anchor.offset).includes('|')
+      ) {
+        tab.setState((state) => {
+          state.wikilink.open = false
+        })
       } else {
-        store.mediaNode$.next(null)
+        if (node && node[0].type === 'wiki-link' && !setSelection) {
+          tab.keyboard.showWikiLink(node[0])
+        } else if (tab.state.wikilink.open && (!setSelection || node[0].type !== 'wiki-link')) {
+          tab.setState((state) => {
+            state.wikilink = {
+              open: false,
+              left: 0,
+              top: 0,
+              keyword: '',
+              offset: 0,
+              mode: 'top'
+            }
+          })
+        }
+
+        if (tab.state.wikilink.open && node[0].type === 'wiki-link') {
+          tab.setState((state) => {
+            state.wikilink.keyword = Node.string(node[0])
+            state.wikilink.offset = sel?.anchor.offset!
+          })
+        }
       }
-      if (node && node[0].type === 'table-cell') {
-        store.setState(state => {
-          state.tableCellNode = node
-          state.refreshTableAttr = !state.refreshTableAttr
-        })
-      } else if (store.tableCellNode) {
-        store.setState(state => {
-          state.tableCellNode = null
-          state.refreshTableAttr = !state.refreshTableAttr
-        })
-      }
+      // if (node && node[0].type === 'media') {
+      //   store.mediaNode$.next(node)
+      // } else {
+      //   store.mediaNode$.next(null)
+      // }
     }
-  }, [editor])
+  }, [tab.editor])
 }

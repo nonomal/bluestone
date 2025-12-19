@@ -1,70 +1,68 @@
 import { observer } from 'mobx-react-lite'
-import { useSubject } from '../../hooks/subscribe'
-import { useEditorStore } from '../store'
-import { useCallback, useRef } from 'react'
+import { ReactNode, useCallback, useEffect, useRef } from 'react'
 import { Node, Selection, Text, Transforms } from 'slate'
 import { EditorUtils } from '../utils/editorUtils'
-import { useGetSetState } from 'react-use'
-import { IFileItem } from '../..'
-import { treeStore } from '../../store/tree'
 import { createPortal } from 'react-dom'
-import INote from '../../icons/INote'
-import INet from '../../icons/Net'
 import isHotkey from 'is-hotkey'
-import { runInAction } from 'mobx'
-import { configStore } from '../../store/config'
-import { join } from 'path'
-import { isLink, parsePath, toRelativePath, toSpacePath } from '../../utils/path'
-import { Icon } from '@iconify/react'
 import { Tooltip } from 'antd'
+import { ISort } from '../../icons/keyboard/ISort'
+import { useTab } from '@/store/note/TabCtx'
+import { FileText, FolderClosed, Trash2, X } from 'lucide-react'
+import { IPlanet } from '../icons/IPlanet'
+import { isLink, parsePath } from '../utils'
+import { IDoc } from 'types/model'
+import { useLocalState } from '@/hooks/useLocalState'
+import { useTranslation } from 'react-i18next'
 
-type DocItem = IFileItem & { path: string; parentPath?: string }
-const width = 350
+type ShowDoc = { doc: IDoc; path: string }
+type ShowAnchor = { doc: IDoc; path: string; value: string }
+const width = 380
 export const InsertLink = observer(() => {
-  const store = useEditorStore()
-  const selRef = useRef<Selection>()
+  const tab = useTab()
+  const { t } = useTranslation()
+  const selRef = useRef<Selection>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const docMap = useRef(new Map<string, IFileItem & { path: string; parentPath?: string }>())
-  const [state, setState] = useGetSetState({
+  const docMap = useRef(new Map<string, IDoc>())
+  const [state, setState] = useLocalState({
     open: false,
     left: 0,
     y: 0,
     mode: 'top',
     inputKeyword: '',
-    oldUrl: '',
+    selectDocId: '',
     index: 0,
-    docs: [] as DocItem[],
-    filterDocs: [] as DocItem[],
-    anchors: [] as { item: DocItem; value: string }[],
-    filterAnchors: [] as { item: DocItem; value: string }[]
+    docs: [] as ShowDoc[],
+    filterDocs: [] as ShowDoc[],
+    anchors: [] as ShowAnchor[],
+    filterAnchors: [] as ShowAnchor[]
   })
 
-  const getAnchors = useCallback((item: DocItem) => {
+  const getAnchors = useCallback(async (item: IDoc) => {
+    let schema = item.schema
+    if (!schema) {
+      schema = (await tab.store.model.getDoc(item.id))?.schema
+    }
     return (item.schema || [])
       .filter((e) => e.type === 'head')
       .map((e) => {
         let text = Node.string(e)
-        return { item, value: '#' + text }
+        return { doc: item, value: text, path: tab.note.getDocPath(item).join('/') }
       })
   }, [])
 
-  const setAnchors = useCallback(() => {
-    if (isLink(state().inputKeyword)) return setState({ anchors: [] })
-    const parse = parsePath(state().inputKeyword)
-    if (!parse.path) {
-      const item = treeStore.openedNote
+  const setAnchors = useCallback(async () => {
+    if (isLink(state.inputKeyword) || !state.selectDocId) return setState({ anchors: [] })
+    const parse = parsePath(state.inputKeyword)
+    if (state.selectDocId === tab.store.note.state.opendDoc?.id) {
+      const item = tab.note.state.opendDoc
       if (item) {
-        const anchors = getAnchors({
-          ...item,
-          parentPath: '',
-          path: ''
+        const anchors = await getAnchors({
+          ...item
         })
         setState({
           anchors,
-          filterAnchors: parse.hash
-            ? anchors.filter((a) => a.value.includes('#' + parse.hash))
-            : anchors
+          filterAnchors: parse.hash ? anchors.filter((a) => a.value.includes(parse.hash)) : anchors
         })
         scrollRef.current?.scrollTo({ top: 0 })
       } else {
@@ -72,14 +70,12 @@ export const InsertLink = observer(() => {
       }
       return
     } else {
-      const item = docMap.current.get(join(treeStore.root?.filePath || '', parse.path))
+      const item = tab.note.state.nodes[state.selectDocId]
       if (item) {
-        const anchors = getAnchors(item)
+        const anchors = await getAnchors(item)
         setState({
           anchors,
-          filterAnchors: parse.hash
-            ? anchors.filter((a) => a.value.includes('#' + parse.hash))
-            : anchors
+          filterAnchors: parse.hash ? anchors.filter((a) => a.value.includes(parse.hash)) : anchors
         })
         scrollRef.current?.scrollTo({ top: 0 })
       } else {
@@ -92,34 +88,21 @@ export const InsertLink = observer(() => {
     e.preventDefault()
   }, [])
 
-  const setPath = useCallback((path: string) => {
-    if (isLink(path)) {
-      close(path)
-    } else {
-      const parse = parsePath(path)
-      if (!parse.path && parse.hash) {
-        return close('#' + parse.hash)
-      }
-      const filePath = store.openFilePath || ''
-      const realPath = join(treeStore.root?.filePath || '', parse.path)
-      const relativePath = realPath === store.openFilePath ? '' : toRelativePath(filePath, realPath)
-      close(`${relativePath}${parse.hash ? `#${parse.hash}` : ''}`)
-    }
-  }, [])
-
   const keydown = useCallback((e: KeyboardEvent) => {
     if (isHotkey('esc', e)) {
-      close(state().oldUrl)
+      close()
     }
-    if (isHotkey('tab', e) && !isLink(state().inputKeyword)) {
-      if (state().filterAnchors.length) {
-        const target = state().filterAnchors[state().index]
+    if (isHotkey('tab', e) && !isLink(state.inputKeyword)) {
+      if (state.filterAnchors.length) {
+        const target = state.filterAnchors[state.index]
         if (target) {
           e.preventDefault()
-          setState({ inputKeyword: target.item.path + target.value })
+          setState({
+            inputKeyword: target.path + '#' + target.value
+          })
         }
       } else {
-        const target = state().filterDocs[state().index]
+        const target = state.filterDocs[state.index]
         if (target) {
           e.preventDefault()
           setState({ inputKeyword: target.path })
@@ -128,47 +111,58 @@ export const InsertLink = observer(() => {
     }
     if (isHotkey('up', e)) {
       e.preventDefault()
-      if ((state().filterDocs.length || state().filterAnchors.length) && state().index > 0) {
+      if ((state.filterDocs.length || state.filterAnchors.length) && state.index > 0) {
         setState({
-          index: state().index - 1
+          index: state.index - 1
         })
       }
     }
-    if (isHotkey('down', e) ) {
+    if (isHotkey('down', e)) {
       e.preventDefault()
-      if (state().anchors.length) {
-        if (state().index < state().filterAnchors.length - 1) {
+      if (state.anchors.length) {
+        if (state.index < state.filterAnchors.length - 1) {
           setState({
-            index: state().index + 1
+            index: state.index + 1
           })
         }
-      } else if (state().index < state().filterDocs.length - 1) {
+      } else if (state.index < state.filterDocs.length - 1) {
         setState({
-          index: state().index + 1
+          index: state.index + 1
         })
       }
     }
     if (isHotkey('enter', e)) {
       e.preventDefault()
-      if (isLink(state().inputKeyword)) {
-        close(state().inputKeyword)
+      if (isLink(state.inputKeyword)) {
+        close({ url: state.inputKeyword, docId: undefined, hash: undefined })
       } else {
-        if (state().anchors.length) {
-          const target = state().filterAnchors[state().index]
+        if (state.anchors.length) {
+          const target = state.filterAnchors[state.index]
           if (target) {
-            setPath(target.item.path + target.value)
+            close({
+              url: undefined,
+              docId:
+                target.doc.id === tab.store.note.state.opendDoc?.id ? undefined : target.doc.id,
+              hash: target.value
+            })
+          } else {
+            close({
+              url: state.inputKeyword,
+              docId: undefined,
+              hash: undefined
+            })
           }
         } else {
-          const target = state().filterDocs[state().index]
+          const target = state.filterDocs[state.index]
           if (target) {
-            setPath(target.path)
+            close({ url: undefined, docId: target.doc.id, hash: undefined })
           } else {
-            close(state().inputKeyword)
+            close({ url: state.inputKeyword, docId: undefined, hash: undefined })
           }
         }
       }
     }
-    const target = scrollRef.current?.children[state().index] as HTMLDivElement
+    const target = scrollRef.current?.children[state.index] as HTMLDivElement
     if (target) {
       const { scrollTop, clientHeight } = scrollRef.current!
       if (target.offsetTop > scrollTop + clientHeight - 50) {
@@ -184,116 +178,157 @@ export const InsertLink = observer(() => {
     }
   }, [])
 
-  useSubject(store.openInsertLink$, (sel) => {
-    if (store.domRect) {
-      selRef.current = sel
-      store.container!.parentElement?.addEventListener('wheel', prevent, { passive: false })
-      const mode =
-        window.innerHeight - store.domRect.top - store.domRect.height < 230 ? 'bottom' : 'top'
+  useEffect(() => {
+    if (tab.state.domRect && tab.state.openInsertLink) {
+      const domRect = tab.state.domRect
+      selRef.current = tab.editor.selection
+      tab.container!.parentElement?.addEventListener('wheel', prevent, {
+        passive: false
+      })
+      const mode = window.innerHeight - domRect.top - domRect.height < 260 ? 'bottom' : 'top'
       let y =
-        mode === 'bottom'
-          ? window.innerHeight - store.domRect.top + 5
-          : store.domRect.top + store.domRect.height + 5
-      let left = store.domRect.x
-      left = left - (width - store.domRect.width) / 2
+        mode === 'bottom' ? window.innerHeight - domRect.top + 5 : domRect.top + domRect.height + 5
+      let left = domRect.x
+      left = left - (width - domRect.width) / 2
       if (left > window.innerWidth - width) left = window.innerWidth - width - 4
       if (left < 4) left = 4
       if (left + width > window.innerWidth - 4) {
         left = window.innerWidth - 4 - width
       }
-      const { docs, map } = treeStore.allNotes
-      docMap.current = map
-      const url = EditorUtils.getUrl(store.editor)
-      let path = url
-      if (url && !url.startsWith('#') && !isLink(url) && treeStore.inRoot) {
-        path = toSpacePath(treeStore.root!.filePath, store.openFilePath || '', url)
+      const notes = Object.values(tab.note.state.nodes)
+        .filter((t) => t.id !== tab.store.note.state.opendDoc?.id && t.id !== 'root')
+        .map((t) => {
+          const path = tab.note.getDocPath(t).join('/')
+          docMap.current.set(path, t)
+          return { doc: t, path }
+        })
+      let filterNotes = notes
+      const leaf = EditorUtils.getLink(tab.editor)
+      let path = leaf?.url || ''
+      if (leaf?.docId) {
+        const target = tab.note.state.nodes[leaf.docId]
+        if (target) {
+          path = tab.note.getDocPath(target).join('/')
+          filterNotes = [{ doc: target, path: tab.note.getDocPath(target).join('/') }]
+          setState({ selectDocId: leaf.docId })
+        }
       }
-      const parse = parsePath(path)
-      const filterDocs = parse.path ? docs.filter((f) => f.path.includes(parse.path) && f.filePath !== treeStore.openedNote?.filePath) : docs.slice()
+      if (leaf?.hash) {
+        path += `#${leaf.hash}`
+        if (!leaf.docId) {
+          setState({ selectDocId: tab.store.note.state.opendDoc?.id || '' })
+        }
+        setState({ inputKeyword: path })
+        setAnchors()
+      } else {
+        setState({ anchors: [] })
+      }
+      if (!path && leaf?.docId) {
+        path = 'not found'
+        filterNotes = []
+      }
       setState({
         left,
         y,
-        oldUrl: url || '',
         mode,
         open: true,
-        filterDocs: treeStore.inRoot ? filterDocs : [],
-        docs: treeStore.inRoot ? docs : [],
+        filterDocs: filterNotes,
+        docs: notes,
         inputKeyword: path
       })
-      if (parse.hash) {
-        setAnchors()
-      } else {
-        setState({
-          filterAnchors: [],
-          anchors: []
-        })
-      }
       setTimeout(() => {
         inputRef.current?.focus()
       }, 16)
       window.addEventListener('keydown', keydown)
+    } else {
+      setState({
+        open: false
+      })
     }
-  })
+  }, [tab.state.openInsertLink])
 
-  const close = useCallback((url?: string) => {
-    store.container!.parentElement?.removeEventListener('wheel', prevent)
-    setState({ open: false })
-    Transforms.select(store.editor, selRef.current!)
-    EditorUtils.focus(store.editor)
-    Transforms.setNodes(store.editor, { url }, { match: Text.isText, split: true })
-    window.removeEventListener('keydown', keydown)
-    runInAction(() => {
-      store.openLinkPanel = false
-    })
-  }, [])
-  if (!state().open) return null
+  const close = useCallback(
+    (data?: { url?: string; docId?: string; hash?: string } | null) => {
+      tab.container?.parentElement?.removeEventListener('wheel', prevent)
+      setState({ open: false })
+      Transforms.select(tab.editor, selRef.current!)
+      EditorUtils.focus(tab.editor)
+      if (data === null) {
+        Transforms.setNodes(
+          tab.editor,
+          { url: undefined, docId: undefined, hash: undefined },
+          { match: Text.isText, split: true }
+        )
+      }
+      if (data) {
+        Transforms.setNodes(tab.editor, { ...data }, { match: Text.isText, split: true })
+      }
+      window.removeEventListener('keydown', keydown)
+      tab.setState((state) => {
+        state.openInsertLink = false
+      })
+    },
+    [tab]
+  )
+  if (!state.open) return null
   return createPortal(
-    <div className={'fixed z-[100] inset-0'} onClick={() => close(state().oldUrl)}>
+    <div className={'fixed z-[100] inset-0'} onClick={() => close()}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className={'absolute z-30 w-[350px] ctx-panel pt-3 flex flex-col'}
+        className={'absolute z-30 w-[370px] ctx-panel pt-3 flex flex-col'}
         style={{
-          left: state().left,
-          top: state().mode === 'top' ? state().y : undefined,
-          bottom: state().mode === 'bottom' ? state().y : undefined
+          left: state.left,
+          top: state.mode === 'top' ? state.y : undefined,
+          bottom: state.mode === 'bottom' ? state.y : undefined
         }}
       >
         <div className={'px-3 flex items-center'}>
           <input
             ref={inputRef}
-            value={state().inputKeyword}
+            value={state.inputKeyword}
             spellCheck={false}
             onKeyDown={(e) => {
               if (e.key === '#') {
+                if (!state.inputKeyword) {
+                  setState({
+                    selectDocId: tab.store.note.state.opendDoc?.id || ''
+                  })
+                } else {
+                  const p = parsePath(state.inputKeyword)
+                  setState({
+                    selectDocId: docMap.current.get(p.path)?.id || ''
+                  })
+                }
                 setAnchors()
               }
               if (
                 e.key.toLowerCase() === 'backspace' &&
-                state().anchors.length &&
+                state.anchors.length &&
                 (e.metaKey ||
                   e.altKey ||
-                  state().inputKeyword.endsWith('#') ||
-                  !state().inputKeyword.includes('#'))
+                  state.inputKeyword.endsWith('#') ||
+                  !state.inputKeyword.includes('#'))
               ) {
                 setState({
                   anchors: [],
-                  filterAnchors: []
+                  filterAnchors: [],
+                  selectDocId: ''
                 })
               }
             }}
             onChange={(e) => {
               const key = e.target.value.toLowerCase()
-              if (state().anchors.length) {
+              if (state.anchors.length) {
                 const parse = parsePath(key)
-                const filterAnchors = state().anchors.filter((d) => {
+                const filterAnchors = state.anchors.filter((d) => {
                   return !parse.hash || d.value.toLowerCase().includes(parse.hash)
                 })
                 setState({
                   filterAnchors
                 })
               } else {
-                const filterDocs = state().docs.filter((d) => {
-                  return d.path.toLowerCase().includes(key) && d.filePath !== treeStore.openedNote?.filePath
+                const filterDocs = state.docs.filter((d) => {
+                  return d.path!.toLowerCase().includes(key)
                 })
                 setState({
                   filterDocs
@@ -304,21 +339,19 @@ export const InsertLink = observer(() => {
                 index: 0
               })
             }}
-            placeholder={`${
-              treeStore.inRoot ? 'Url filepath #head, tab key completion' : 'Link or #head'
-            }`}
-            className={`flex-1 text-sm border rounded dark:border-gray-200/30 border-gray-300 h-7 px-2 outline-none bg-zinc-100 dark:bg-black/30`}
+            placeholder={t('editor.insertLink.placeholder')}
+            className={`flex-1 text-sm border rounded dark:border-gray-200/30 border-gray-300 h-8 px-2 outline-none bg-zinc-100 dark:bg-black/30`}
           />
-          <Tooltip title={configStore.zh ? '移除链接' : 'Remove link'} mouseEnterDelay={0.5}>
+          <Tooltip title={t('editor.insertLink.removeLink')} mouseEnterDelay={0.5}>
             <div
               className={
-                'p-1 rounded ml-1 hover:bg-gray-200/70 cursor-pointer dark:hover:bg-gray-100/10 text-gray-600 dark:text-gray-300'
+                'p-1 text-base rounded ml-1 hover:bg-gray-200/70 cursor-pointer dark:hover:bg-gray-100/10 text-gray-600 dark:text-gray-300'
               }
               onClick={() => {
-                close()
+                close(null)
               }}
             >
-              <Icon icon={'mi:delete'} />
+              <Trash2 size={16} />
             </div>
           </Tooltip>
         </div>
@@ -326,99 +359,134 @@ export const InsertLink = observer(() => {
           className={'flex-1 overflow-y-auto py-2 max-h-[200px] px-2 text-[15px] relative'}
           ref={scrollRef}
         >
-          {isLink(state().inputKeyword) ||
-          (!treeStore.inRoot && !!state().inputKeyword && !state().anchors.length) ? (
+          {isLink(state.inputKeyword) && !!state.inputKeyword ? (
             <>
               <div
                 onClick={(e) => {
-                  close(state().inputKeyword)
+                  close({ url: state.inputKeyword })
                 }}
                 className={`flex justify-center py-1.5 rounded bg-gray-200/70 dark:bg-gray-100/10 cursor-pointer px-2 flex-col`}
               >
-                <div className={'text-gray-600 dark:text-gray-300 flex items-stretch'}>
-                  <INet className={'flex-shrink-0 mt-0.5'} />
+                <div className={'text-gray-600 dark:text-gray-300 flex'}>
+                  <IPlanet className={'flex-shrink-0 h-5'} />
                   <span className={'ml-1 flex-1 max-w-full text-sm break-all'}>
-                    {state().inputKeyword}
+                    {state.inputKeyword}
                   </span>
                 </div>
               </div>
             </>
           ) : (
             <>
-              {!!state().anchors.length &&
-                state().filterAnchors.map((a, i) => (
+              {!!state.anchors.length &&
+                state.filterAnchors.map((a, i) => (
                   <div
                     key={i}
                     onMouseEnter={(e) => {
                       setState({ index: i })
                     }}
                     onClick={(e) => {
-                      setPath(a.item.path + a.value)
+                      close({
+                        docId:
+                          a.doc.id === tab.store.note.state.opendDoc?.id ? undefined : a.doc.id,
+                        hash: a.value
+                      })
                     }}
-                    className={`flex justify-center py-1 rounded ${
-                      state().index === i ? 'bg-gray-200/70 dark:bg-gray-100/10' : ''
+                    className={`flex justify-center py-0.5 rounded ${
+                      state.index === i ? 'bg-gray-200/70 dark:bg-gray-100/10' : ''
                     } cursor-pointer px-2 flex-col`}
                   >
-                    <div className={'text-gray-700 dark:text-white/90 flex items-center leading-6'}>
-                      <INote />
-                      <span className={'ml-1 flex-1 max-w-full truncate'}>
-                        {a.item.filePath === store.openFilePath ? '' : a.item.filename + '.md'}
-                        {a.value}
+                    <div
+                      className={
+                        'text-gray-600 dark:text-gray-300 stroke-gray-600 dark:stroke-gray-300 flex items-start leading-6'
+                      }
+                    >
+                      <div className={'h-6 flex items-center'}>
+                        <FileText size={14} />
+                      </div>
+                      <span className={'ml-1 flex-1 max-w-full break-all text-sm'}>
+                        {a.doc.id === tab.store.note.state.opendDoc?.id ? '' : a.doc.name}#{a.value}
                       </span>
                     </div>
-                    {!!a.item.parentPath && (
+                    {!!a.doc.parentId && a.doc.parentId !== 'root' && (
                       <div
-                        className={'text-gray-500 dark:text-gray-400 text-sm pl-[18px] truncate'}
+                        className={
+                          'text-gray-500 dark:text-gray-400 text-sm pl-[18px] break-all text-[13px]'
+                        }
                       >
-                        {a.item.parentPath}
+                        {a.path?.split('/').slice(0, -1).join('/')}
                       </div>
                     )}
                   </div>
                 ))}
-              {!state().anchors.length &&
-                state().filterDocs.map((f, i) => {
+              {!state.anchors.length &&
+                state.filterDocs.map((f, i) => {
                   return (
                     <div
-                      key={f.cid}
+                      key={f.doc.id}
                       onMouseEnter={(e) => {
                         setState({ index: i })
                       }}
                       onClick={(e) => {
-                        setPath(f.path)
+                        close({ docId: f.doc.id })
                       }}
-                      className={`flex justify-center py-1 rounded ${
-                        state().index === i ? 'bg-gray-200/70 dark:bg-gray-100/10' : ''
-                      } cursor-pointer px-2 flex-col ${
-                        f.filePath === store.openFilePath ? 'hidden' : ''
-                      }`}
+                      className={`flex justify-center py-0.5 rounded ${
+                        state.index === i ? 'bg-gray-200/70 dark:bg-gray-100/10' : ''
+                      } cursor-pointer px-2 flex-col ${f.doc.id === tab.store.note.state.opendDoc?.id ? 'hidden' : ''}`}
                     >
                       <div
-                        className={'text-gray-700 dark:text-white/90 flex items-center leading-6'}
+                        className={
+                          'text-gray-600 dark:text-white/90 stroke-gray-600 dark:stroke-white/90 flex items-start leading-6 text-sm'
+                        }
                       >
-                        <INote />
-                        <span className={'ml-1 flex-1 max-w-full truncate'}>{f.filename}</span>
+                        <div className={'h-6 flex items-center'}>
+                          {f.doc.folder ? <FolderClosed size={14} /> : <FileText size={14} />}
+                        </div>
+                        <span className={'ml-1 flex-1 max-w-full break-all'}>{f.doc.name}</span>
                       </div>
-                      {!!f.parentPath && (
+                      {!!f.doc.parentId && f.doc.parentId !== 'root' && (
                         <div
-                          className={'text-gray-500 dark:text-white/70 text-sm pl-[18px] truncate'}
+                          className={
+                            'text-gray-500 dark:text-white/70 pl-[18px] break-all text-[13px]'
+                          }
                         >
-                          {f.parentPath}
+                          {f.path?.split('/').slice(0, -1).join('/')}
                         </div>
                       )}
                     </div>
                   )
                 })}
-              {((!!state().anchors.length && !state().filterAnchors.length) ||
-                (!!state().docs.length && !state().filterDocs.length)) && (
-                <div className={'py-4 text-center text-gray-400'}>
-                  {configStore.zh ? '没有相关文档' : 'No related documents'}
+              {((!!state.anchors.length && !state.filterAnchors.length) ||
+                (!!state.docs.length && !state.filterDocs.length) ||
+                (!state.anchors.length && !state.docs.length)) && (
+                <div className={'py-4 text-center text-gray-400 text-sm'}>
+                  {t('editor.insertLink.noRelatedDocs')}
                 </div>
               )}
             </>
           )}
         </div>
+        <div
+          className={
+            'flex items-center justify-around h-7 leading-7 border-t dark:border-white/5 dark:text-white/60 px-3 text-black/60 border-black/5'
+          }
+        >
+          <span className={'text-xs flex items-center'}>
+            <ISort className={'mr-1'} />
+            {t('editor.insertLink.navigate')}
+          </span>
+          <span className={'text-xs ml-2.5'}>
+            <span className={'font-bold'}>tab</span> {t('editor.insertLink.complete')}
+          </span>
+          <span className={'text-xs ml-2.5'}>
+            <span className={'font-bold'}>#</span> {t('editor.insertLink.linkHeading')}
+          </span>
+          <span className={'text-xs ml-2.5 flex items-center'}>
+            <span className={'font-bold'}>esc</span>
+            <X className={'ml-0.5 relative top-[0.5px]'} size={12} />
+          </span>
+        </div>
       </div>
     </div>,
     document.body
-  )
+  ) as ReactNode
 })

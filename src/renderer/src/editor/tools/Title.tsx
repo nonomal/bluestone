@@ -1,124 +1,155 @@
-import { observer } from 'mobx-react-lite'
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { Tooltip } from 'antd'
-import { useLocalState } from '../../hooks/useLocalState'
-import { IFileItem } from '../../index'
-import { readdirSync } from 'fs'
-import { join } from 'path'
-import { configStore } from '../../store/config'
-import { updateFilePath } from '../utils/updateNode'
 import isHotkey from 'is-hotkey'
 import { ReactEditor } from 'slate-react'
-import { useEditorStore } from '../store'
 import { Editor, Transforms } from 'slate'
-import { treeStore } from '../../store/tree'
-import { runInAction } from 'mobx'
-import { MainApi } from '../../api/main'
-import { keyTask$ } from '@renderer/hooks/keyboard'
+import { useGetSetState } from 'react-use'
+import { IDoc } from 'types/model'
+import { useStore } from '@/store/store'
+import { TabStore } from '@/store/note/tab'
+import { File } from 'lucide-react'
+import { observer } from 'mobx-react-lite'
+import { useTranslation } from 'react-i18next'
 
-export const Title = observer(({ node }: { node: IFileItem }) => {
-  const store = useEditorStore()
-  const [state, setState] = useLocalState({
+export const Title = observer(({ tab }: { tab: TabStore }) => {
+  const store = useStore()
+  const { t } = useTranslation()
+  const inputRef = useRef<HTMLDivElement>(null)
+  const [state, setState] = useGetSetState({
     name: '',
-    tip: false
+    tip: false,
+    tipMessage: ''
   })
 
+  const nodeRef = useRef<IDoc | undefined>(tab.state.doc)
+  const setName = useCallback((name: string = '') => {
+    if (inputRef.current) {
+      inputRef.current.innerText = name
+    }
+    setState({ name })
+  }, [])
+  const getName = useCallback(() => {
+    let name = (inputRef.current?.innerText || '').trim().replace(/\n/g, '')
+    if (name.length > 300) {
+      name = name.slice(0, 300)
+      if (inputRef.current) {
+        inputRef.current.innerText = name
+      }
+    }
+    return name
+  }, [])
   useEffect(() => {
-    setState({ name: node?.filename || '' })
-  }, [node])
+    setState({ tip: false })
+    setName(tab.state.doc?.name)
+    nodeRef.current = tab.state.doc
+  }, [tab.state.doc])
 
-  const detectRename = useCallback(() => {
-    const name = state.name.trim()
-    if (
-      node.parent &&
-      node.parent.children!.some((s) => s.cid !== node.cid && s.filename === name)
-    ) {
-      setState({ tip: true })
+  const detectRename = useCallback(async () => {
+    const doc = nodeRef.current!
+    const name = getName()
+    if (name.includes('/')) {
+      setState({
+        tip: true,
+        tipMessage: t('editor.title.noSpecialChar')
+      })
       return false
     }
-    if (!node.parent && name !== node.filename) {
-      const files = readdirSync(join(node.filePath, '..'))
-      if (files.some((f) => f === name)) {
-        setState({ tip: true })
-        return false
-      }
+    const count = await store.model.findDocName({
+      spaceId: doc.spaceId,
+      name: name,
+      parentId: doc.parentId
+    })
+    if (count) {
+      setState({ tip: true, tipMessage: '' })
+      return false
     }
-    setState({ tip: false })
+    setState({ tip: false, tipMessage: '' })
     return true
-  }, [node])
+  }, [])
 
   const save = useCallback(async () => {
-    const name = state.name.trim()
-    if (!name) {
-      setState({ name: node.filename || '' })
-    } else if (node) {
-      if (node.ghost) {
-        runInAction(() => (node.filename = name))
-      } else if (!node.parent && !node.spaceId) {
-        const oldPath = node.filePath
-        if (oldPath !== state.name) {
-          MainApi.saveDialog({
-            filters: [{ name: 'md', extensions: ['md'] }],
-            properties: ['createDirectory'],
-            defaultPath: state.name
-          }).then((res) => {
-            if (res.filePath && oldPath !== res.filePath) {
-              updateFilePath(node, res.filePath)
-            } else {
-              setState({ name: node.filename })
-            }
-          })
-        }
-      } else if (treeStore.root && treeStore.nodeMap.get(node.cid)) {
-        if (detectRename()) {
-          if (node.spaceId && treeStore.root) {
-            const oldPath = node.filePath
-            await updateFilePath(node, join(node.filePath, '..', name + '.' + node.ext))
-            if (node.spaceId) {
-              treeStore.refactor.refactorDepOnLink(node, oldPath)
-            }
-          }
-        } else {
-          setState({ name: node.filename })
-        }
+    const name = getName()
+    const doc = nodeRef.current!
+    const oldPath = store.note.getDocPath(doc).join('/')
+    if (name === doc.name) {
+      setState({ tip: false, tipMessage: '' })
+    } else if (doc && (await detectRename())) {
+      if (!name) {
+        setName(doc.name)
+      } else {
+        tab.store.model.updateDoc(doc.id, { name })
+        store.note.setState((state) => {
+          state.nodes[doc.id].name = name
+        })
+        store.note.refactor.refactor(doc, oldPath)
+        store.local.localRename(oldPath, doc)
+        store.note.refreshNav$.next(null)
+        setState({ tip: false, tipMessage: '' })
       }
     }
-    setState({ tip: false })
-  }, [node])
+  }, [])
+  // useSubject(core.ipc.updateDoc$, (data) => {
+  //   if (data.cid === nodeRef.current?.cid && data.title) {
+  //     setName(data.title)
+  //   }
+  // })
   return (
     <Tooltip
-      title={configStore.zh ? '已经有一个同名的文件' : `There's already a file with the same name`}
+      title={state().tipMessage || t('editor.title.duplicateFileName')}
       color={'magenta'}
-      open={state.tip}
+      open={state().tip}
       placement={'bottom'}
     >
-      <div className={'mt-12'}>
-        <input
-          value={state.name}
-          onChange={(e) => {
-            setState({ name: e.target.value })
-            detectRename()
+      <div
+        className={`${store.settings.state.reduceFileName ? 'mini mt-8 flex items-baseline mb-6 ' : 'mt-12 mb-4'}`}
+      >
+        {store.settings.state.reduceFileName && (
+          <File
+            className={
+              'mr-1 relative top-0.5 text-sm flex-shrink-0 w-4 h-4 dark:text-white/60 text-black/60'
+            }
+          />
+        )}
+        <div
+          contentEditable={true}
+          ref={inputRef}
+          spellCheck={false}
+          onPaste={(e) => {
+            e.preventDefault()
+            const text = e.clipboardData.getData('text/plain')
+            if (text) {
+              document.execCommand('insertText', false, text.replace(/\/|\n/g, ''))
+            }
           }}
-          onFocus={() => {
-            keyTask$.next({key: 'blur'})
-          }}
+          suppressContentEditableWarning={true}
           onKeyDown={(e) => {
+            if (
+              inputRef.current &&
+              inputRef.current.innerText.length > 300 &&
+              e.key.toLowerCase() !== 'backspace' &&
+              e.key.toLowerCase() !== 'enter'
+            ) {
+              e.preventDefault()
+            }
+            if (e.key.toLowerCase() === 'enter') {
+              e.preventDefault()
+            }
             if (isHotkey('mod+s', e)) {
+              e.preventDefault()
               save()
             }
             if (isHotkey('enter', e) || isHotkey('down', e)) {
               e.preventDefault()
               try {
-                ReactEditor.focus(store.editor)
-                Transforms.select(store.editor, Editor.start(store.editor, []))
+                ReactEditor.focus(tab.editor)
+                Transforms.select(tab.editor, Editor.start(tab.editor, []))
               } catch (e) {
                 console.error(e)
               }
             }
           }}
           onBlur={save}
-          placeholder={'Untitled'}
-          className={'page-title'}
+          className={`page-title`}
         />
       </div>
     </Tooltip>

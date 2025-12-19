@@ -1,21 +1,24 @@
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
-import commonjsExternals from 'vite-plugin-commonjs-externals';
-
-const externals = ['path', /^electron(\/.+)?$/, 'fs', 'crypto', 'fs/promises']
+import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
-    server: {
-      port: 5175
-    }
+    plugins: [externalizeDepsPlugin()]
   },
   preload: {
     plugins: [externalizeDepsPlugin()]
   },
   renderer: {
+    resolve: {
+      alias: {
+        '@renderer': resolve('src/renderer/src'),
+        '@': resolve('src/renderer/src') // Alias for src folder
+      }
+    },
     build: {
+      minify: true,
+      cssMinify: true,
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
@@ -23,17 +26,6 @@ export default defineConfig({
         }
       }
     },
-    resolve: {
-      alias: {
-        '@renderer': resolve('src/renderer/src')
-      }
-    },
-    plugins: [
-      react(),
-      // @ts-ignore
-      commonjsExternals({
-        externals
-      })
-    ]
+    plugins: [tailwindcss(), react()]
   }
 })
